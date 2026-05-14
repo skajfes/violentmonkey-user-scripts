@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Stacked diff syntax highlighting
 // @namespace    personal.ado.tweaks
-// @version      1.0.1
+// @version      1.0.2
 // @description  Adds client-side syntax highlighting (via highlight.js) to the stacked folder-diff view, which ADO renders as plain HTML without any tokenization.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -183,13 +183,20 @@
     header.querySelectorAll('.repos-line-content').forEach(line => highlightLine(line, lang));
   };
 
+  // Skip anything inside a Monaco editor — those surfaces are React-owned and
+  // mutating their DOM breaks reconciliation (e.g. comment threads on diffs).
+  const inMonaco = (el) => !!el.closest('.monaco-editor');
+
   let queued = false;
   const queueScan = () => {
     if (queued) return;
     queued = true;
     requestAnimationFrame(() => {
       queued = false;
-      document.querySelectorAll('.repos-summary-header').forEach(processHeader);
+      document.querySelectorAll('.repos-summary-header').forEach(header => {
+        if (inMonaco(header)) return;
+        processHeader(header);
+      });
     });
   };
 
