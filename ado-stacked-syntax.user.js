@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Stacked diff syntax highlighting
 // @namespace    personal.ado.tweaks
-// @version      1.0.2
+// @version      1.0.3
 // @description  Adds client-side syntax highlighting (via highlight.js) to the stacked folder-diff view, which ADO renders as plain HTML without any tokenization.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -41,9 +41,26 @@
     sql: 'sql',
   };
 
-  // VS Code Light+ palette (default) with Dark+ fallback for prefers-color-scheme: dark
+  // VS Code Light+ palette (default) with Dark+ fallback for prefers-color-scheme: dark.
+  // Overlay strategy: we never replace the line's children (React owns them and
+  // crashes during reconciliation if we do). Instead we append an .ado-hl-overlay
+  // child positioned over the line, hide the original text via color:transparent,
+  // and color the overlay.
   const style = document.createElement('style');
   style.textContent = `
+    .repos-line-content.ado-hl-applied { position: relative; }
+    .repos-line-content.ado-hl-applied > :not(.ado-hl-overlay):not(.screen-reader-only) {
+      color: transparent !important;
+    }
+    .ado-hl-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      white-space: pre;
+      font: inherit;
+      color: inherit;
+    }
+
     .repos-line-content .hljs-keyword,
     .repos-line-content .hljs-tag,
     .repos-line-content .hljs-name,
@@ -145,27 +162,35 @@
     return hljs.getLanguage(lang) ? lang : null;
   };
 
+  const getCodeText = (span) => {
+    // textContent minus any .screen-reader-only descendants (e.g. "Plus"/"Minus"
+    // prefixes) so they don't leak into the highlight input.
+    let text = '';
+    const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => n.parentElement?.closest('.screen-reader-only')
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT,
+    });
+    let n;
+    while ((n = walker.nextNode())) text += n.nodeValue;
+    return text;
+  };
+
   const highlightLine = (span, lang) => {
     if (span.hasAttribute(PROCESSED)) return;
     span.setAttribute(PROCESSED, '1');
 
-    // Remove screen-reader-only spans (e.g. "Plus"/"Minus" line prefixes) before
-    // highlighting so they don't leak into the code stream. We'll put them back.
-    const srNodes = [...span.querySelectorAll('.screen-reader-only')];
-    srNodes.forEach(n => n.remove());
-
-    const codeText = span.textContent;
-    if (!codeText || !codeText.trim()) {
-      srNodes.forEach(n => span.insertBefore(n, span.firstChild));
-      return;
-    }
+    const codeText = getCodeText(span);
+    if (!codeText || !codeText.trim()) return;
 
     try {
       const result = hljs.highlight(codeText, { language: lang, ignoreIllegals: true });
-      span.innerHTML = result.value;
-      for (let i = srNodes.length - 1; i >= 0; i--) {
-        span.insertBefore(srNodes[i], span.firstChild);
-      }
+      const overlay = document.createElement('span');
+      overlay.className = 'ado-hl-overlay';
+      overlay.setAttribute('aria-hidden', 'true');
+      overlay.innerHTML = result.value;
+      span.appendChild(overlay);
+      span.classList.add('ado-hl-applied');
     } catch (e) {
       log('highlight error', e, { codeText });
     }
@@ -183,20 +208,13 @@
     header.querySelectorAll('.repos-line-content').forEach(line => highlightLine(line, lang));
   };
 
-  // Skip anything inside a Monaco editor — those surfaces are React-owned and
-  // mutating their DOM breaks reconciliation (e.g. comment threads on diffs).
-  const inMonaco = (el) => !!el.closest('.monaco-editor');
-
   let queued = false;
   const queueScan = () => {
     if (queued) return;
     queued = true;
     requestAnimationFrame(() => {
       queued = false;
-      document.querySelectorAll('.repos-summary-header').forEach(header => {
-        if (inMonaco(header)) return;
-        processHeader(header);
-      });
+      document.querySelectorAll('.repos-summary-header').forEach(processHeader);
     });
   };
 
