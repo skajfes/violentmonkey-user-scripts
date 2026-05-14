@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub PR: File-tree viewed checkboxes + folder filter
 // @namespace    personal.github.tweaks
-// @version      1.0.2
+// @version      1.0.4
 // @description  In the Files Changed / Changes view, mirrors each file's native "Viewed" toggle into the file tree as a checkbox, and lets you click a folder in the tree to filter the diff list to just that folder's files. Click the same folder (or the "Clear filter" pill) to unfilter.
 // @match        https://github.com/*/*/pull/*/files*
 // @match        https://github.com/*/*/pull/*/changes*
@@ -28,17 +28,20 @@
     .ghpt-tree-checkbox {
       appearance: none;
       -webkit-appearance: none;
-      width: 13px; height: 13px;
-      margin: 0 6px 0 2px;
+      width: 14px; height: 14px;
       flex-shrink: 0;
       border: 1.5px solid var(--fgColor-muted, #656d76);
       border-radius: 3px;
-      background: transparent;
+      background: var(--bgColor-default, #ffffff);
       cursor: pointer;
-      vertical-align: middle;
-      position: relative;
       box-sizing: border-box;
       transition: background 100ms ease, border-color 100ms ease;
+      position: absolute;
+      right: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 5;
+      margin: 0;
     }
     .ghpt-tree-checkbox:hover {
       border-color: var(--fgColor-default, #1f2328);
@@ -186,7 +189,7 @@
   // ---- viewed-state mirror ----------------------------------------------
 
   const injectCheckbox = (item) => {
-    if (item.querySelector(':scope > .PRIVATE_TreeView-item-container .ghpt-tree-checkbox')) return;
+    if (item.querySelector(':scope > .PRIVATE_TreeView-item-container > .ghpt-tree-checkbox')) return;
     const diffId = getDiffIdFromTreeItem(item);
     if (!diffId) return;
     const toggle = findViewedButton(diffId);
@@ -225,17 +228,13 @@
     toggle.addEventListener('change', sync);
     toggle.addEventListener('click', () => requestAnimationFrame(sync));
 
-    // The new Primer treeitem uses CSS grid. Place the checkbox in the leadingVisual
-    // slot so it sits between the chevron and the file name without breaking layout.
+    // Absolute-position the checkbox at the right edge of the row. Primer's grid
+    // template doesn't reserve a slot we can hijack reliably, so we sidestep it.
     const container = item.querySelector(':scope > .PRIVATE_TreeView-item-container') || item;
-    let leading = container.querySelector(':scope > .PRIVATE_TreeView-item-leadingVisual, :scope > [data-component="leadingVisual"]');
-    if (!leading) {
-      leading = document.createElement('div');
-      leading.className = 'PRIVATE_TreeView-item-leadingVisual';
-      leading.style.cssText = 'grid-area: leadingVisual; display: flex; align-items: center;';
-      container.appendChild(leading);
+    if (getComputedStyle(container).position === 'static') {
+      container.style.position = 'relative';
     }
-    leading.insertBefore(cb, leading.firstChild);
+    container.appendChild(cb);
     log('mirrored viewed for', diffId);
   };
 
@@ -279,8 +278,14 @@
     const ids = activeIds ? new Set(activeIds) : null;
     document.querySelectorAll('[id^="diff-"]').forEach((el) => {
       if (!DIFF_ID_RE.test(el.id)) return;
-      if (!ids) { el.classList.remove(HIDDEN_CLASS); return; }
-      el.classList.toggle(HIDDEN_CLASS, !ids.has(el.id));
+      // Hide the per-file FLEX SHELL, not just the inner diff. The shell sits inside
+      // a `d-flex flex-column gap-3` parent; even when the inner is display:none, the
+      // shell still counts as a flex item, so the parent renders its `gap-3` (~16px)
+      // between every consecutive hidden shell. With dozens of hidden files that
+      // stacks into hundreds of pixels of empty space above the visible diffs.
+      const shell = el.closest('[class*="diffEntry" i], [class*="DiffEntry" i]') || el;
+      if (!ids) { shell.classList.remove(HIDDEN_CLASS); return; }
+      shell.classList.toggle(HIDDEN_CLASS, !ids.has(el.id));
     });
   };
 
@@ -315,7 +320,12 @@
 
     item.addEventListener('click', (e) => {
       if (!isFolder(item)) return;
+      // Capture-phase fires on every ancestor LI. Make sure the click actually
+      // targets THIS row, not a nested treeitem inside it (otherwise clicking a
+      // subfolder would filter the outermost ancestor instead).
       const t = e.target;
+      const targetItem = t.closest('[role="treeitem"]');
+      if (targetItem !== item) return;
       // Let our own checkbox handle itself
       if (t.closest('.ghpt-tree-checkbox')) return;
       // Let the chevron toggle expand/collapse natively
