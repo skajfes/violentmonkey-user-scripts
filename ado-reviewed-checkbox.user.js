@@ -39,7 +39,7 @@
       align-items: center;
       gap: 6px;
       margin-left: 12px;
-      padding: 3px 10px 3px 7px;
+      padding: 3px 12px 3px 11px;
       border-radius: 999px;
       cursor: pointer;
       user-select: none;
