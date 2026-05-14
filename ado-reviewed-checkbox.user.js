@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Reviewed checkbox on stacked diff headers
 // @namespace    personal.ado.tweaks
-// @version      1.0.1
+// @version      1.0.4
 // @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -41,9 +41,9 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      margin-left: 12px;
-      padding: 3px 12px 3px 11px;
-      border-radius: 999px;
+      margin: 4px 12px;
+      padding: 8px 14px;
+      border-radius: 5px;
       cursor: pointer;
       user-select: none;
       font-size: 12px;
