@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GitHub PR: File-tree viewed checkboxes + folder filter
 // @namespace    personal.github.tweaks
-// @version      1.0.4
-// @description  In the Files Changed / Changes view, mirrors each file's native "Viewed" toggle into the file tree as a checkbox, and lets you click a folder in the tree to filter the diff list to just that folder's files. Click the same folder (or the "Clear filter" pill) to unfilter.
+// @version      1.0.5
+// @description  In the Files Changed / Changes view, mirrors each file's native "Viewed" toggle into the file tree as a checkbox, lets you click a folder in the tree to filter the diff list to just that folder's files, and adds a "Load all files" button that scrolls through to force every lazy-rendered diff to materialise. Click the same folder (or the "Clear filter" pill) to unfilter.
 // @match        https://github.com/*/*/pull/*/files*
 // @match        https://github.com/*/*/pull/*/changes*
 // @run-at       document-idle
@@ -101,6 +101,30 @@
       text-decoration: underline;
     }
     .${HIDDEN_CLASS} { display: none !important; }
+
+    .ghpt-load-all-btn {
+      appearance: none;
+      cursor: pointer;
+      padding: 4px 10px;
+      margin: 0 0 0 8px;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1.5;
+      border-radius: 6px;
+      border: 1px solid var(--borderColor-default, rgba(31,35,40,0.15));
+      background: var(--bgColor-default, #f6f8fa);
+      color: var(--fgColor-default, #1f2328);
+      white-space: nowrap;
+      transition: background 100ms ease, border-color 100ms ease;
+    }
+    .ghpt-load-all-btn:hover {
+      background: var(--bgColor-muted, #eaeef2);
+      border-color: var(--borderColor-muted, rgba(31,35,40,0.25));
+    }
+    .ghpt-load-all-btn:disabled {
+      cursor: progress;
+      opacity: 0.7;
+    }
   `;
   (document.head || document.documentElement).appendChild(style);
 
@@ -336,11 +360,102 @@
     }, true); // capture so we run before React's row handler
   };
 
+  // ---- "Load all files" button ------------------------------------------
+
+  let loadAllBtn = null;
+  let loadAllInFlight = false;
+
+  const ensureLoadAllButton = () => {
+    if (loadAllBtn && loadAllBtn.isConnected) return;
+    // Prefer the tree filter row (sits above the file tree). Fall back to the diff
+    // viewer container so the button still appears even if the filter row moves.
+    const host = document.querySelector('#diff-file-tree-filter')
+              || document.querySelector('#diff-comparison-viewer-container');
+    if (!host) return;
+
+    loadAllBtn = document.createElement('button');
+    loadAllBtn.type = 'button';
+    loadAllBtn.className = 'ghpt-load-all-btn';
+    loadAllBtn.textContent = 'Load all files';
+    loadAllBtn.title = 'Scroll through the PR to force every lazy-rendered diff to materialise';
+    loadAllBtn.addEventListener('click', runLoadAll);
+
+    if (host.id === 'diff-file-tree-filter') host.appendChild(loadAllBtn);
+    else host.insertBefore(loadAllBtn, host.firstChild);
+  };
+
+  async function runLoadAll() {
+    if (loadAllInFlight || !loadAllBtn) return;
+    loadAllInFlight = true;
+    const btn = loadAllBtn;
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const fileEls = () => [...document.querySelectorAll('[id^="diff-"]')].filter((e) => DIFF_ID_RE.test(e.id));
+    const totalFiles = () => fileEls().length;
+    // "Rendered" = the per-file Viewed toggle exists. If the diff is still a
+    // placeholder skeleton, the button isn't there yet.
+    const renderedFiles = () => fileEls().filter((e) =>
+      e.querySelector('button[aria-label="Viewed"], button[aria-label="Not Viewed"]')
+    ).length;
+
+    const clickLoadDiffs = () => {
+      let n = 0;
+      document.querySelectorAll('button').forEach((b) => {
+        const t = (b.textContent || '').trim().toLowerCase();
+        if (t === 'load diff' || t.startsWith('load diff') || t === 'show diff' || t === 'display the rich diff') {
+          b.click();
+          n++;
+        }
+      });
+      return n;
+    };
+
+    const scroller = document.scrollingElement || document.documentElement;
+    const maxScroll = () => scroller.scrollHeight - scroller.clientHeight;
+    const initialTop = scroller.scrollTop;
+
+    let stable = 0;
+    let step = 0;
+    try {
+      while (stable < 4 && step < 400) {
+        const beforeRendered = renderedFiles();
+        const beforeTop = scroller.scrollTop;
+        scroller.scrollTo({
+          top: Math.min(beforeTop + scroller.clientHeight * 0.85, maxScroll()),
+        });
+        await wait(300);
+        const clicked = clickLoadDiffs();
+        if (clicked) await wait(400);
+
+        const r = renderedFiles();
+        const atBottom = scroller.scrollTop >= maxScroll() - 1;
+        const noProgress = r === beforeRendered && scroller.scrollTop === beforeTop;
+        stable = atBottom && noProgress ? stable + 1 : 0;
+
+        btn.textContent = `Loading… ${r}/${totalFiles()}`;
+        step++;
+      }
+    } finally {
+      scroller.scrollTo({ top: initialTop, behavior: 'instant' });
+      btn.textContent = `Loaded ${renderedFiles()}/${totalFiles()}`;
+      setTimeout(() => {
+        btn.textContent = originalLabel;
+        btn.disabled = false;
+      }, 2000);
+      loadAllInFlight = false;
+      // Newly rendered files have viewed-buttons now — let the scan inject checkboxes.
+      queueScan();
+    }
+  }
+
   // ---- scan / observer ---------------------------------------------------
 
   let scanQueued = false;
   const scan = () => {
     scanQueued = false;
+    ensureLoadAllButton();
     const items = allTreeItems();
     if (!items.length) { warn('no treeitems found'); return; }
     items.forEach((item) => {
