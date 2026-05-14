@@ -1,7 +1,8 @@
-# Azure DevOps PR Userscripts
+# PR Review Userscripts
 
-Personal Violentmonkey userscripts that make Azure DevOps pull request reviews less painful.
-Tested on ADO Services (cloud), Firefox + Chrome, JetBrains Mono Nerd Font installed locally.
+Personal Violentmonkey userscripts that make pull request reviews less painful — Azure
+DevOps and GitHub. Tested on ADO Services (cloud) and github.com, Firefox + Chrome,
+JetBrains Mono Nerd Font installed locally.
 
 ## Scripts
 
@@ -27,6 +28,22 @@ the native file-tree checkbox and auto-collapsing the file when reviewed.
   `aria-checked`, which our MutationObserver picks up and clicks ADO's native
   `.bolt-card-expand-button` to collapse/expand. Clicking the native chevron manually
   does *not* touch reviewed state (deliberately).
+
+### `github-pr-file-tree.user.js`
+Brings two ADO-style affordances to the GitHub PR **Files changed** view: a viewed
+checkbox on every file row in the tree, and folder-as-filter on the tree's folder rows.
+
+- Mirrors GitHub's native per-file **Viewed** toggle into the tree as a checkbox.
+  Clicking either the tree checkbox or the file-header Viewed checkbox toggles both;
+  state is driven through the native `<input name="viewed">` so it persists server-side.
+- Reconstructs tree structure from `[role="treeitem"]` rows via their `aria-level`,
+  since GitHub renders the tree as a flat virtualized list.
+- Clicking a **folder** row filters the diff list to just that folder's files
+  (sets `display: none` on the others, with a sticky "Clear filter" pill at the top).
+  Clicking the same folder again, or the pill, clears the filter. Clicks on the
+  expand/collapse chevron icon are allowed through so the native tree toggle still works.
+- Files that haven't been rendered yet (GitHub lazy-loads diffs as you scroll) get
+  their tree checkbox on the next observer tick once their `.file` container appears.
 
 ### `ado-stacked-syntax.user.js`
 Adds client-side syntax highlighting to the **stacked** folder-diff view, which ADO
@@ -85,6 +102,7 @@ prefixes:
 
 - `[ado-reviewed]` — path detection, tree-row matching, injection skips
 - `[ado-syntax]` — language detection per file, highlight errors
+- `[gh-pr-tree]` — tree-row scan, viewed-mirror injection, folder filter activations
 
 The Razor-highlight script has no debug flag but exposes `ado-razor` as a registered
 Monaco language. Verify with:
@@ -105,3 +123,12 @@ monaco.languages.getLanguages().some(l => l.id === 'ado-razor');  // should be t
 - **Stacked-view files not currently scrolled into the tree sidebar** don't get the
   Reviewed pill, because ADO virtualizes the tree and their checkboxes aren't in the DOM.
   Scroll the tree to materialize the rows and they'll get mirrored on the next tick.
+- **GitHub folder click intercepts the native row toggle.** Plain click on a folder
+  row is repurposed as "filter to this folder"; expand/collapse is preserved via the
+  chevron icon only. If GitHub renames the chevron's class (currently
+  `octicon-chevron-right` / `octicon-chevron-down`), update the selector in
+  `github-pr-file-tree.user.js` → `bindFolder`.
+- **GitHub viewed-mirror depends on `input[name="viewed"]`** existing in each file's
+  header. If GitHub renames that input or moves to a non-form interaction model, the
+  mirror checkbox stops syncing — fall back via the alternates in
+  `findNativeViewedCheckbox`.
