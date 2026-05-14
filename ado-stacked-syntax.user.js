@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Stacked diff syntax highlighting
 // @namespace    personal.ado.tweaks
-// @version      1.0.3
+// @version      1.0.4
 // @description  Adds client-side syntax highlighting (via highlight.js) to the stacked folder-diff view, which ADO renders as plain HTML without any tokenization.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -48,9 +48,13 @@
   // and color the overlay.
   const style = document.createElement('style');
   style.textContent = `
-    .repos-line-content.ado-hl-applied { position: relative; }
-    .repos-line-content.ado-hl-applied > :not(.ado-hl-overlay):not(.screen-reader-only) {
-      color: transparent !important;
+    .repos-line-content.ado-hl-applied {
+      position: relative;
+      visibility: hidden;
+    }
+    .repos-line-content.ado-hl-applied .screen-reader-only,
+    .repos-line-content.ado-hl-applied .ado-hl-overlay {
+      visibility: visible;
     }
     .ado-hl-overlay {
       position: absolute;
@@ -58,7 +62,6 @@
       pointer-events: none;
       white-space: pre;
       font: inherit;
-      color: inherit;
     }
 
     .repos-line-content .hljs-keyword,
