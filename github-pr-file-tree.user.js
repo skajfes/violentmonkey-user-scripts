@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub PR: File-tree viewed checkboxes + folder filter
 // @namespace    personal.github.tweaks
-// @version      1.0.1
+// @version      1.0.2
 // @description  In the Files Changed / Changes view, mirrors each file's native "Viewed" toggle into the file tree as a checkbox, and lets you click a folder in the tree to filter the diff list to just that folder's files. Click the same folder (or the "Clear filter" pill) to unfilter.
 // @match        https://github.com/*/*/pull/*/files*
 // @match        https://github.com/*/*/pull/*/changes*
@@ -120,32 +120,35 @@
   };
 
   const getDiffIdFromTreeItem = (item) => {
-    // The file row usually wraps an anchor like #diff-<sha>
-    const a = item.matches('a[href*="#diff-"]')
-      ? item
-      : item.querySelector('a[href*="#diff-"]');
+    // Scope to the row's OWN content (the new Primer tree is nested — folder LIs
+    // contain children LIs, so an unscoped querySelector would return a descendant's
+    // anchor instead of the row's own).
+    const own = item.querySelector(':scope > .PRIVATE_TreeView-item-container') || item;
+    const a = own.matches('a[href*="#diff-"]') ? own : own.querySelector('a[href*="#diff-"]');
     if (!a) return null;
     const m = a.getAttribute('href').match(/#(diff-[a-f0-9]+)/);
     return m ? m[1] : null;
   };
 
-  const findFileContainer = (diffId) => {
-    // The diff anchor target is the file container itself or its header.
-    let el = document.getElementById(diffId);
-    if (!el) el = document.querySelector(`[data-details-container-for-id="${diffId}"]`);
-    if (!el) return null;
-    // Walk up to the .file/.js-file wrapper (which is what gets hidden when filtered)
-    return el.closest('.file, .js-file, copilot-diff-entry, [data-tagsearch-path]') || el;
-  };
+  const findFileContainer = (diffId) => document.getElementById(diffId);
 
-  const findNativeViewedCheckbox = (diffId) => {
+  // GitHub's new "Changes" view replaced the <input name="viewed"> checkbox with a
+  // <button aria-label="Not Viewed"> / aria-label="Viewed" toggle. State is encoded
+  // in aria-label; toggling means .click().
+  const findViewedButton = (diffId) => {
     const container = findFileContainer(diffId);
     if (!container) return null;
     return container.querySelector(
-      'input[name="viewed"], ' +
-      'input.js-reviewed-checkbox, ' +
-      'input[data-testid="viewed-checkbox"]'
+      'button[aria-label="Not Viewed"], ' +
+      'button[aria-label="Viewed"], ' +
+      'input[name="viewed"]'                       // classic view fallback
     );
+  };
+
+  const isToggleViewed = (toggle) => {
+    if (!toggle) return false;
+    if (toggle.tagName === 'INPUT') return toggle.checked;
+    return toggle.getAttribute('aria-label') === 'Viewed';
   };
 
   const allTreeItems = () => [...document.querySelectorAll('[role="treeitem"]')];
@@ -154,20 +157,14 @@
   // Tree is rendered as a flat list of treeitems; descendants are items at deeper aria-level
   // that follow until we hit an item at the folder's level or shallower.
   const collectFolderDescendantDiffIds = (folderItem) => {
-    const items = allTreeItems();
-    const idx = items.indexOf(folderItem);
-    if (idx === -1) return [];
-    const baseLevel = parseInt(folderItem.getAttribute('aria-level') || '1', 10);
-    const ids = [];
-    for (let i = idx + 1; i < items.length; i++) {
-      const lvl = parseInt(items[i].getAttribute('aria-level') || '1', 10);
-      if (lvl <= baseLevel) break;
-      if (!isFolder(items[i])) {
-        const id = getDiffIdFromTreeItem(items[i]);
-        if (id) ids.push(id);
-      }
-    }
-    return ids;
+    // New tree nests children inside the folder LI, so a subtree querySelectorAll
+    // picks up every descendant file anchor regardless of expansion state.
+    const ids = new Set();
+    folderItem.querySelectorAll('a[href*="#diff-"]').forEach((a) => {
+      const m = a.getAttribute('href').match(/#(diff-[a-f0-9]+)/);
+      if (m) ids.add(m[1]);
+    });
+    return [...ids];
   };
 
   const folderPathLabel = (item) => {
@@ -189,13 +186,13 @@
   // ---- viewed-state mirror ----------------------------------------------
 
   const injectCheckbox = (item) => {
-    if (item.querySelector('.ghpt-tree-checkbox')) return;
+    if (item.querySelector(':scope > .PRIVATE_TreeView-item-container .ghpt-tree-checkbox')) return;
     const diffId = getDiffIdFromTreeItem(item);
     if (!diffId) return;
-    const native = findNativeViewedCheckbox(diffId);
-    if (!native) {
+    const toggle = findViewedButton(diffId);
+    if (!toggle) {
       // The file diff hasn't been rendered yet (GitHub lazy-loads progressive diffs).
-      // We'll retry on the next observer tick.
+      // Retry on the next observer tick.
       return;
     }
 
@@ -204,37 +201,41 @@
     cb.className = 'ghpt-tree-checkbox';
     cb.title = 'Mark this file as viewed';
 
-    // Prevent the tree row's click handler (folder-filter or native expand) from firing.
+    // Stop tree-row click handler (folder-filter or native expand) from firing.
     cb.addEventListener('click', (e) => e.stopPropagation());
     cb.addEventListener('change', (e) => {
       e.stopPropagation();
-      // Drive GitHub's native checkbox via .click() so the form-submit-on-change fires
-      // and the viewed state persists server-side.
-      if (native.checked !== cb.checked) native.click();
+      // Toggle the native control. For the new <button>, .click() flips state and
+      // triggers the server POST. For the classic <input>, .click() does the same.
+      if (isToggleViewed(toggle) !== cb.checked) toggle.click();
     });
 
     const sync = () => {
-      cb.checked = native.checked;
-      item.setAttribute(VIEWED_ATTR, native.checked ? 'true' : 'false');
+      const viewed = isToggleViewed(toggle);
+      cb.checked = viewed;
+      item.setAttribute(VIEWED_ATTR, viewed ? 'true' : 'false');
     };
     sync();
 
-    // GitHub flips .checked on response; both attribute and `change` event tend to fire.
-    new MutationObserver(sync).observe(native, {
+    // New view: state lives in aria-label. Classic view: in checked / aria-checked.
+    new MutationObserver(sync).observe(toggle, {
       attributes: true,
-      attributeFilter: ['checked', 'aria-checked', 'data-checked'],
+      attributeFilter: ['aria-label', 'aria-pressed', 'checked', 'aria-checked', 'data-checked'],
     });
-    native.addEventListener('change', sync);
+    toggle.addEventListener('change', sync);
+    toggle.addEventListener('click', () => requestAnimationFrame(sync));
 
-    // Inject as the first child of the row's inner clickable region so it sits
-    // before the file icon/name.
-    const inner = item.querySelector(
-      'a, ' +
-      '[data-testid="file-tree-item-content"], ' +
-      '.PRIVATE_TreeView-item-content, ' +
-      '.ActionList-content'
-    ) || item;
-    inner.insertBefore(cb, inner.firstChild);
+    // The new Primer treeitem uses CSS grid. Place the checkbox in the leadingVisual
+    // slot so it sits between the chevron and the file name without breaking layout.
+    const container = item.querySelector(':scope > .PRIVATE_TreeView-item-container') || item;
+    let leading = container.querySelector(':scope > .PRIVATE_TreeView-item-leadingVisual, :scope > [data-component="leadingVisual"]');
+    if (!leading) {
+      leading = document.createElement('div');
+      leading.className = 'PRIVATE_TreeView-item-leadingVisual';
+      leading.style.cssText = 'grid-area: leadingVisual; display: flex; align-items: center;';
+      container.appendChild(leading);
+    }
+    leading.insertBefore(cb, leading.firstChild);
     log('mirrored viewed for', diffId);
   };
 
@@ -262,6 +263,7 @@
   const placePill = () => {
     const pill = ensurePill();
     const host = document.querySelector(
+      '#diff-comparison-viewer-container, ' +
       '.js-diff-progressive-container, ' +
       '#files, ' +
       '[data-testid="diff-file-list"]'
@@ -269,15 +271,16 @@
     if (host && pill.parentNode !== host) host.insertBefore(pill, host.firstChild);
   };
 
+  // Match real file diff containers only (id like "diff-<long-hex>"), not wrappers
+  // such as "diff-comparison-viewer-container" or "diff-file-tree-filter".
+  const DIFF_ID_RE = /^diff-[a-f0-9]{20,}$/;
+
   const applyFilter = () => {
     const ids = activeIds ? new Set(activeIds) : null;
-    // .file and .js-file are the classic markers. copilot-diff-entry is the newer one.
-    const files = document.querySelectorAll('.file, .js-file, copilot-diff-entry, [data-details-container-for-id^="diff-"]');
-    files.forEach((f) => {
-      const id = f.id || f.getAttribute('data-details-container-for-id') || '';
-      const diffId = id.startsWith('diff-') ? id : (f.querySelector('[id^="diff-"]')?.id || '');
-      if (!ids) { f.classList.remove(HIDDEN_CLASS); return; }
-      f.classList.toggle(HIDDEN_CLASS, !ids.has(diffId));
+    document.querySelectorAll('[id^="diff-"]').forEach((el) => {
+      if (!DIFF_ID_RE.test(el.id)) return;
+      if (!ids) { el.classList.remove(HIDDEN_CLASS); return; }
+      el.classList.toggle(HIDDEN_CLASS, !ids.has(el.id));
     });
   };
 
@@ -316,7 +319,7 @@
       // Let our own checkbox handle itself
       if (t.closest('.ghpt-tree-checkbox')) return;
       // Let the chevron toggle expand/collapse natively
-      if (t.closest('.octicon-chevron-right, .octicon-chevron-down, [data-testid*="chevron"], [aria-label="Expand"], [aria-label="Collapse"]')) return;
+      if (t.closest('.PRIVATE_TreeView-item-toggle, .octicon-chevron-right, .octicon-chevron-down, [data-testid*="chevron"], [aria-label="Expand"], [aria-label="Collapse"]')) return;
       e.preventDefault();
       e.stopPropagation();
       setFilter(item);
