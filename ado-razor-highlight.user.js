@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: font + Razor highlighting
 // @namespace    personal.ado.tweaks
-// @version      1.0.1
+// @version      1.0.2
 // @description  JetBrains Mono font in Monaco, plus Razor/Blazor syntax highlighting for .razor/.cshtml files in the PR diff viewer.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -17,13 +17,20 @@
   const SIZE = 14;
   const LINE_HEIGHT = 24;
 
-  // Non-Monaco code blocks (PR descriptions, comments)
+  // Non-Monaco code blocks (PR descriptions, comments), plus a font-family
+  // fallback for Monaco itself. The API-based applyFont() is preferred (it lets
+  // Monaco re-measure), but if our bootstrap misses an editor (created before
+  // the hook attached), the CSS keeps at least the typeface consistent.
   const style = document.createElement('style');
   style.textContent = `
     code, pre, .code, .monospaced-text {
       font-family: ${FONT} !important;
       font-size: ${SIZE}px !important;
       line-height: ${LINE_HEIGHT}px !important;
+    }
+    .monaco-editor, .monaco-editor .view-lines, .monaco-editor .view-line,
+    .monaco-editor .monaco-mouse-cursor-text, .monaco-editor textarea {
+      font-family: ${FONT} !important;
     }
   `;
   (document.head || document.documentElement).appendChild(style);
@@ -156,6 +163,8 @@
       });
     };
 
+    const OUR_THEME = 'ado-tweaks-theme';
+
     const applyTheme = () => {
       const cls = document.querySelector('.monaco-editor')?.className || '';
       const dark = cls.includes('vs-dark') || cls.includes('hc-black');
@@ -192,10 +201,15 @@
       ];
 
       try {
-        monaco.editor.defineTheme('ado-tweaks-theme', { base, inherit: true, rules, colors: {} });
-        monaco.editor.setTheme('ado-tweaks-theme');
+        monaco.editor.defineTheme(OUR_THEME, { base, inherit: true, rules, colors: {} });
+        applyingOurTheme = true;
+        try { monaco.editor.setTheme(OUR_THEME); } finally { applyingOurTheme = false; }
       } catch (_) {}
     };
+
+    // Track whether we're the ones calling setTheme so the wrapper below
+    // doesn't recurse when it re-applies our theme after an external override.
+    let applyingOurTheme = false;
 
     const tagExistingModels = () => {
       for (const m of monaco.editor.getModels()) {
@@ -207,10 +221,20 @@
       if (monaco.editor.__adoTweaksHooked) return;
       monaco.editor.__adoTweaksHooked = true;
 
-      const origCreate = monaco.editor.createModel;
+      const origCreateModel = monaco.editor.createModel;
       monaco.editor.createModel = function (value, language, uri) {
         if (isRazorUri(uri?.toString?.())) language = LANG;
-        return origCreate.call(this, value, language, uri);
+        return origCreateModel.call(this, value, language, uri);
+      };
+
+      // Wrap setTheme so ADO can't silently revert our theme on navigation.
+      const origSetTheme = monaco.editor.setTheme;
+      monaco.editor.setTheme = function (name) {
+        const ret = origSetTheme.call(this, name);
+        if (!applyingOurTheme && name !== OUR_THEME) {
+          try { applyTheme(); } catch (_) {}
+        }
+        return ret;
       };
 
       monaco.editor.onDidCreateModel?.((m) => {
@@ -229,14 +253,27 @@
     const run = () => {
       if (!window.monaco?.languages || !monaco.editor?.getModels) return false;
       registerRazor();
-      applyTheme();
       hookFutures();
       tagExistingModels();
+      applyTheme();
       return true;
     };
 
+    // SPA navigation: ADO swaps views without a full page load, often
+    // re-creating editors and resetting the global theme. Re-run setup so our
+    // theme + language tagging persist across PR → file → diff transitions.
+    const hookNavigation = () => {
+      const onNav = () => setTimeout(run, 50);
+      for (const k of ['pushState', 'replaceState']) {
+        const orig = history[k];
+        history[k] = function (...a) { const r = orig.apply(this, a); onNav(); return r; };
+      }
+      window.addEventListener('popstate', onNav);
+    };
+    hookNavigation();
+
     if (run()) return;
-    const iv = setInterval(() => { if (run()) clearInterval(iv); }, 200);
+    const iv = setInterval(() => { if (run()) clearInterval(iv); }, 100);
     setTimeout(() => clearInterval(iv), 60_000);
   }
 
