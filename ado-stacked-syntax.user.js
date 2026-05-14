@@ -1,13 +1,16 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Stacked diff syntax highlighting
 // @namespace    personal.ado.tweaks
-// @version      1.0.0
+// @version      1.0.1
 // @description  Adds client-side syntax highlighting (via highlight.js) to the stacked folder-diff view, which ADO renders as plain HTML without any tokenization.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
 // @run-at       document-idle
 // @grant        none
 // @require      https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js
+// @downloadURL  https://raw.githubusercontent.com/skajfes/violentmonkey-user-scripts/main/ado-stacked-syntax.user.js
+// @updateURL    https://raw.githubusercontent.com/skajfes/violentmonkey-user-scripts/main/ado-stacked-syntax.user.js
+// @homepageURL  https://github.com/skajfes/violentmonkey-user-scripts
 // ==/UserScript==
 
 (() => {

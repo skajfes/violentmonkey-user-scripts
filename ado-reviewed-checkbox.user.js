@@ -1,12 +1,15 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Reviewed checkbox on stacked diff headers
 // @namespace    personal.ado.tweaks
-// @version      1.0.0
+// @version      1.0.1
 // @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
 // @run-at       document-idle
 // @grant        none
+// @downloadURL  https://raw.githubusercontent.com/skajfes/violentmonkey-user-scripts/main/ado-reviewed-checkbox.user.js
+// @updateURL    https://raw.githubusercontent.com/skajfes/violentmonkey-user-scripts/main/ado-reviewed-checkbox.user.js
+// @homepageURL  https://github.com/skajfes/violentmonkey-user-scripts
 // ==/UserScript==
 
 (() => {

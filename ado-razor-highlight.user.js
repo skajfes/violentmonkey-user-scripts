@@ -1,12 +1,15 @@
 // ==UserScript==
 // @name         Azure DevOps PR: font + Razor highlighting
 // @namespace    personal.ado.tweaks
-// @version      1.0.0
+// @version      1.0.1
 // @description  JetBrains Mono font in Monaco, plus Razor/Blazor syntax highlighting for .razor/.cshtml files in the PR diff viewer.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
 // @run-at       document-start
 // @grant        none
+// @downloadURL  https://raw.githubusercontent.com/skajfes/violentmonkey-user-scripts/main/ado-razor-highlight.user.js
+// @updateURL    https://raw.githubusercontent.com/skajfes/violentmonkey-user-scripts/main/ado-razor-highlight.user.js
+// @homepageURL  https://github.com/skajfes/violentmonkey-user-scripts
 // ==/UserScript==
 
 (() => {
