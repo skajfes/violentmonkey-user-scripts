@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         GitHub PR: File-tree viewed checkboxes + folder filter
 // @namespace    personal.github.tweaks
-// @version      1.0.0
-// @description  In the Files Changed view, mirrors each file's native "Viewed" toggle into the file tree as a checkbox, and lets you click a folder in the tree to filter the diff list to just that folder's files. Click the same folder (or the "Clear filter" pill) to unfilter.
+// @version      1.0.1
+// @description  In the Files Changed / Changes view, mirrors each file's native "Viewed" toggle into the file tree as a checkbox, and lets you click a folder in the tree to filter the diff list to just that folder's files. Click the same folder (or the "Clear filter" pill) to unfilter.
 // @match        https://github.com/*/*/pull/*/files*
+// @match        https://github.com/*/*/pull/*/changes*
 // @run-at       document-idle
 // @grant        none
 // @downloadURL  https://raw.githubusercontent.com/skajfes/violentmonkey-user-scripts/main/github-pr-file-tree.user.js
