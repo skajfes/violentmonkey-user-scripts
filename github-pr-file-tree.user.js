@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GitHub PR: File-tree viewed checkboxes + folder filter
 // @namespace    personal.github.tweaks
-// @version      1.0.5
-// @description  In the Files Changed / Changes view, mirrors each file's native "Viewed" toggle into the file tree as a checkbox, lets you click a folder in the tree to filter the diff list to just that folder's files, and adds a "Load all files" button that scrolls through to force every lazy-rendered diff to materialise. Click the same folder (or the "Clear filter" pill) to unfilter.
+// @version      1.0.6
+// @description  In the Files Changed / Changes view, mirrors each file's native "Viewed" toggle into the file tree as a checkbox, lets you click a folder OR file in the tree to filter the diff list to just that folder's files (or that single file), and adds a "Load all files" button that scrolls through to force every lazy-rendered diff to materialise. Click the same row (or the "Clear filter" pill) to unfilter.
 // @match        https://github.com/*/*/pull/*/files*
 // @match        https://github.com/*/*/pull/*/changes*
 // @run-at       document-idle
@@ -264,9 +264,17 @@
 
   // ---- folder filter -----------------------------------------------------
 
-  let activeFolder = null;
+  // activeRow can be a folder treeitem (filter = all its descendant files) OR a
+  // file treeitem (filter = just that one file).
+  let activeRow = null;
   let activeIds = null;
   let pillEl = null;
+
+  const collectRowDiffIds = (item) => {
+    if (isFolder(item)) return collectFolderDescendantDiffIds(item);
+    const id = getDiffIdFromTreeItem(item);
+    return id ? [id] : [];
+  };
 
   const ensurePill = () => {
     if (pillEl) return pillEl;
@@ -313,22 +321,22 @@
     });
   };
 
-  const setFilter = (folderItem) => {
-    if (activeFolder === folderItem) { clearFilter(); return; }
-    if (activeFolder) activeFolder.classList.remove(FILTER_CLASS);
-    activeFolder = folderItem;
-    activeIds = collectFolderDescendantDiffIds(folderItem);
-    folderItem.classList.add(FILTER_CLASS);
+  const setFilter = (item) => {
+    if (activeRow === item) { clearFilter(); return; }
+    if (activeRow) activeRow.classList.remove(FILTER_CLASS);
+    activeRow = item;
+    activeIds = collectRowDiffIds(item);
+    item.classList.add(FILTER_CLASS);
     placePill();
     pillEl.querySelector('.ghpt-filter-pill-text').textContent =
-      `Filtered to ${folderPathLabel(folderItem)} (${activeIds.length} file${activeIds.length === 1 ? '' : 's'})`;
+      `Filtered to ${folderPathLabel(item)} (${activeIds.length} file${activeIds.length === 1 ? '' : 's'})`;
     applyFilter();
-    log('filter on', folderPathLabel(folderItem), activeIds);
+    log('filter on', folderPathLabel(item), activeIds);
   };
 
   function clearFilter() {
-    if (activeFolder) activeFolder.classList.remove(FILTER_CLASS);
-    activeFolder = null;
+    if (activeRow) activeRow.classList.remove(FILTER_CLASS);
+    activeRow = null;
     activeIds = null;
     pillEl?.remove();
     pillEl = null;
@@ -338,12 +346,11 @@
 
   // ---- tree row click binding -------------------------------------------
 
-  const bindFolder = (item) => {
+  const bindRow = (item) => {
     if (item.getAttribute(BOUND_ATTR) === '1') return;
     item.setAttribute(BOUND_ATTR, '1');
 
     item.addEventListener('click', (e) => {
-      if (!isFolder(item)) return;
       // Capture-phase fires on every ancestor LI. Make sure the click actually
       // targets THIS row, not a nested treeitem inside it (otherwise clicking a
       // subfolder would filter the outermost ancestor instead).
@@ -354,9 +361,17 @@
       if (t.closest('.ghpt-tree-checkbox')) return;
       // Let the chevron toggle expand/collapse natively
       if (t.closest('.PRIVATE_TreeView-item-toggle, .octicon-chevron-right, .octicon-chevron-down, [data-testid*="chevron"], [aria-label="Expand"], [aria-label="Collapse"]')) return;
-      e.preventDefault();
-      e.stopPropagation();
-      setFilter(item);
+
+      if (isFolder(item)) {
+        // Folder rows have no native navigation we want to keep — swallow it.
+        e.preventDefault();
+        e.stopPropagation();
+        setFilter(item);
+      } else {
+        // File rows have an anchor that scrolls to the diff; let that proceed
+        // so the (now sole visible) diff stays scrolled into view.
+        setFilter(item);
+      }
     }, true); // capture so we run before React's row handler
   };
 
@@ -459,14 +474,14 @@
     const items = allTreeItems();
     if (!items.length) { warn('no treeitems found'); return; }
     items.forEach((item) => {
-      if (isFolder(item)) bindFolder(item);
-      else injectCheckbox(item);
+      bindRow(item);
+      if (!isFolder(item)) injectCheckbox(item);
     });
-    if (activeFolder && !activeFolder.isConnected) {
-      // Tree re-rendered and our folder ref is stale. Drop filter.
+    if (activeRow && !activeRow.isConnected) {
+      // Tree re-rendered and our row ref is stale. Drop filter.
       clearFilter();
-    } else if (activeFolder) {
-      activeIds = collectFolderDescendantDiffIds(activeFolder);
+    } else if (activeRow) {
+      activeIds = collectRowDiffIds(activeRow);
       applyFilter();
       placePill();
     }
