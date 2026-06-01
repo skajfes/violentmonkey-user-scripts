@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Reviewed checkbox on stacked diff headers
 // @namespace    personal.ado.tweaks
-// @version      1.0.4
+// @version      1.0.5
 // @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -181,6 +181,23 @@
     return null;
   };
 
+  // If the given header's top got scrolled above the viewport (i.e. its
+  // beginning is no longer visible), bring it back to the top edge. Re-checks
+  // across a few frames so it catches ADO's collapse animation / sticky release
+  // settling rather than measuring too early.
+  const keepTopInView = (header) => {
+    let frames = 0;
+    const check = () => {
+      const top = header.getBoundingClientRect().top;
+      if (top < 0) {
+        header.scrollIntoView({ block: 'start' });
+        return;
+      }
+      if (++frames < 6) requestAnimationFrame(check);
+    };
+    requestAnimationFrame(check);
+  };
+
   // ---- mirror pill -------------------------------------------------------
   const createMirror = (treeCheckbox, card) => {
     const wrap = document.createElement('label');
@@ -210,7 +227,14 @@
       if (!expandBtn) return;
       const isExpanded = expandBtn.getAttribute('aria-expanded') === 'true';
       const shouldBeExpanded = !checked;
-      if (isExpanded !== shouldBeExpanded) expandBtn.click();
+      if (isExpanded === shouldBeExpanded) return;
+      const collapsing = !shouldBeExpanded;
+      expandBtn.click();
+      // When collapsing a file you scrolled into the middle of, the sticky
+      // header releases and the card snaps up above the viewport, dragging the
+      // following files out of view. If the file's top ends up scrolled past,
+      // pull it back to the top so the next files stay where the eye expects.
+      if (collapsing) keepTopInView(card);
     };
     sync();
 
