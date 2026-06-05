@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GitHub PR: File-tree viewed checkboxes + folder filter
 // @namespace    personal.github.tweaks
-// @version      1.0.6
-// @description  In the Files Changed / Changes view, mirrors each file's native "Viewed" toggle into the file tree as a checkbox, lets you click a folder OR file in the tree to filter the diff list to just that folder's files (or that single file), and adds a "Load all files" button that scrolls through to force every lazy-rendered diff to materialise. Click the same row (or the "Clear filter" pill) to unfilter.
+// @version      1.1.0
+// @description  In the Files Changed / Changes view, mirrors each file's native "Viewed" toggle into the file tree as a checkbox (folders get one too — it checks/unchecks all files underneath and reflects all/some/none viewed), lets you click a folder OR file in the tree to filter the diff list to just that folder's files (or that single file), and adds a "Load all files" button that scrolls through to force every lazy-rendered diff to materialise. Click the same row (or the "Clear filter" pill) to unfilter.
 // @match        https://github.com/*/*/pull/*/files*
 // @match        https://github.com/*/*/pull/*/changes*
 // @run-at       document-idle
@@ -58,6 +58,17 @@
       border-right: 2px solid #fff;
       border-bottom: 2px solid #fff;
       transform: rotate(45deg);
+    }
+    .ghpt-tree-checkbox:indeterminate {
+      background: var(--bgColor-success-emphasis, #1f883d);
+      border-color: var(--bgColor-success-emphasis, #1f883d);
+    }
+    .ghpt-tree-checkbox:indeterminate::after {
+      content: "";
+      position: absolute;
+      left: 2px; top: 4.5px;
+      width: 7px; height: 2px;
+      background: #fff;
     }
 
     [role="treeitem"][${VIEWED_ATTR}="true"] {
@@ -212,8 +223,62 @@
 
   // ---- viewed-state mirror ----------------------------------------------
 
+  const ownCheckbox = (item) =>
+    item.querySelector(':scope > .PRIVATE_TreeView-item-container > .ghpt-tree-checkbox');
+
+  // Folder checkbox state is derived from descendant FILE treeitems' VIEWED_ATTR
+  // (set by each file's sync). Files whose diff hasn't rendered yet have no attr
+  // and count as not-viewed, so the folder can't claim "all viewed" prematurely.
+  const syncFolderCheckbox = (folderItem) => {
+    const cb = ownCheckbox(folderItem);
+    if (!cb) return;
+    const files = [...folderItem.querySelectorAll('[role="treeitem"]')].filter((it) => !isFolder(it));
+    const viewed = files.filter((it) => it.getAttribute(VIEWED_ATTR) === 'true').length;
+    cb.checked = files.length > 0 && viewed === files.length;
+    cb.indeterminate = viewed > 0 && viewed < files.length;
+  };
+
+  let folderSyncQueued = false;
+  const queueFolderSync = () => {
+    if (folderSyncQueued) return;
+    folderSyncQueued = true;
+    requestAnimationFrame(() => {
+      folderSyncQueued = false;
+      allTreeItems().filter(isFolder).forEach(syncFolderCheckbox);
+    });
+  };
+
+  const injectFolderCheckbox = (item) => {
+    if (ownCheckbox(item)) return;
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'ghpt-tree-checkbox';
+    cb.title = 'Mark all files in this folder as viewed';
+
+    cb.addEventListener('click', (e) => e.stopPropagation());
+    cb.addEventListener('change', (e) => {
+      e.stopPropagation();
+      const desired = cb.checked;
+      collectFolderDescendantDiffIds(item).forEach((diffId) => {
+        const toggle = findViewedButton(diffId);
+        // Unrendered diffs have no toggle to click — the folder sync below will
+        // pull the checkbox back to partial/unchecked so state stays honest.
+        if (toggle && isToggleViewed(toggle) !== desired) toggle.click();
+      });
+      queueFolderSync();
+    });
+
+    const container = item.querySelector(':scope > .PRIVATE_TreeView-item-container') || item;
+    if (getComputedStyle(container).position === 'static') {
+      container.style.position = 'relative';
+    }
+    container.appendChild(cb);
+    syncFolderCheckbox(item);
+  };
+
   const injectCheckbox = (item) => {
-    if (item.querySelector(':scope > .PRIVATE_TreeView-item-container > .ghpt-tree-checkbox')) return;
+    if (ownCheckbox(item)) return;
     const diffId = getDiffIdFromTreeItem(item);
     if (!diffId) return;
     const toggle = findViewedButton(diffId);
@@ -241,6 +306,8 @@
       const viewed = isToggleViewed(toggle);
       cb.checked = viewed;
       item.setAttribute(VIEWED_ATTR, viewed ? 'true' : 'false');
+      // Any file flip can change an ancestor folder's all/some/none state.
+      queueFolderSync();
     };
     sync();
 
@@ -475,8 +542,10 @@
     if (!items.length) { warn('no treeitems found'); return; }
     items.forEach((item) => {
       bindRow(item);
-      if (!isFolder(item)) injectCheckbox(item);
+      if (isFolder(item)) injectFolderCheckbox(item);
+      else injectCheckbox(item);
     });
+    queueFolderSync();
     if (activeRow && !activeRow.isConnected) {
       // Tree re-rendered and our row ref is stale. Drop filter.
       clearFilter();
