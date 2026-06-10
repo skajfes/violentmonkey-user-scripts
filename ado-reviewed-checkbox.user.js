@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Reviewed checkbox on stacked diff headers
 // @namespace    personal.ado.tweaks
-// @version      1.0.7
+// @version      1.0.8
 // @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -144,26 +144,17 @@
     // Strip them so reconstructed paths match the clean header path.
     const cleanName = (raw) => (raw || '').trim().replace(/\s*[+\-*]+\s*$/, '').trim();
 
-    // Prefer text outside badge-ish elements (comment-count pills etc.) so
-    // the name comes out clean at the source; fall back to the raw text if
-    // the heuristic eats everything.
-    const rowName = (row) => {
-      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
-      let node, txt = '';
-      while ((node = walker.nextNode())) {
-        if (node.parentElement?.closest('[class*="pill"], [class*="badge"], [class*="comment"], [role="checkbox"]')) continue;
-        txt += node.nodeValue;
-      }
-      return cleanName(txt) || cleanName(row.textContent);
-    };
-
     for (const row of rows) {
       const level = parseInt(row.getAttribute('aria-level') || '0', 10);
-      const name = rowName(row);
+      const name = cleanName(row.textContent);
       if (!name || level < 1) continue;
       stack.length = level - 1;
       stack[level - 1] = name;
-      if (row.hasAttribute('aria-expanded')) continue; // folder
+      // aria-expanded can't be used to detect folders: files with comment
+      // threads are expandable too (each thread is a child row). A row is a
+      // file iff it carries the reviewed checkbox — folders and comment rows
+      // don't have one.
+      if (!row.querySelector(TREE_CHECK_SEL)) continue;
       const path = '/' + stack.slice(0, level).join('/');
       byPath.set(path, row);
       if (!byName.has(name)) byName.set(name, []);
@@ -172,25 +163,12 @@
     return { byPath, byName };
   };
 
-  // Rows for files with comment threads get the comment-count badge appended
-  // to their textContent — plain counts ("UpdateOffer.cs2") or resolved
-  // fractions ("UpdateOffer.cs0/2") — so exact comparisons fail for exactly
-  // the commented files. A tree name matches the wanted name when any
-  // leftover after it is just badge text (digits, "+", "/", whitespace) —
-  // never part of a real extension's start (".").
-  const BADGE_JUNK = /^[\s\d+/]*$/;
-  const badgeMatch = (treeText, wanted) =>
-    treeText === wanted ||
-    (treeText.startsWith(wanted) && BADGE_JUNK.test(treeText.slice(wanted.length)));
-
+  // The tree is virtualized: an ancestor row scrolled out of the DOM leaves
+  // an empty segment in the reconstructed path — treat it as a wildcard.
   const pathsMatch = (treePath, headerPath) => {
     const a = treePath.split('/');
     const b = headerPath.split('/');
-    // A "/" inside the badge ("0/2") spills extra segments into the tree
-    // path; they're fine as long as they're all pure badge junk.
-    if (a.length < b.length) return false;
-    return b.every((seg, i) => badgeMatch(a[i], seg)) &&
-           a.slice(b.length).every((seg) => BADGE_JUNK.test(seg));
+    return a.length === b.length && a.every((seg, i) => seg === '' || seg === b[i]);
   };
 
   const findTreeRow = (headerPath, map) => {
@@ -199,12 +177,7 @@
       if (pathsMatch(p, headerPath) || headerPath.endsWith(p) || p.endsWith(headerPath)) return row;
     }
     const filename = headerPath.split('/').pop();
-    let cands = map.byName.get(filename) || [];
-    if (!cands.length) {
-      for (const [name, rows] of map.byName) {
-        if (badgeMatch(name, filename)) { cands = rows; break; }
-      }
-    }
+    const cands = map.byName.get(filename) || [];
     if (cands.length === 1) return cands[0];
     if (cands.length > 1) {
       let best = cands[0], bestScore = -1;
