@@ -30,22 +30,23 @@ the native file-tree checkbox and auto-collapsing the file when reviewed.
   does *not* touch reviewed state (deliberately).
 
 ### `ado-filter-shortcut.user.js`
-On a PR's **Files** tab, press **`f`** (outside any text field) to open the toolbar
-"Filter results" dropdown with the keyword box focused. Type a name, press **Enter** —
-the file tree filters to matching files. **Esc** closes the dropdown (native bolt
-behavior).
+GitHub-style file filter for the PR **Files** tab: a box above the file tree that
+filters **as you type** — both the tree and the stacked diff view. Press **`f`** to
+focus it, **Esc** to clear (second Esc blurs). A `shown/total` counter sits in the box.
 
-- ADO has no inline tree-filter input on PR pages; the **Keyword** filter inside the
-  toolbar funnel dropdown is the native way to narrow the tree. The script just turns
-  the click-funnel-click-box dance into one keystroke.
-- Selectors verified against the live DOM: the funnel is `.repos-compare-filter button`,
-  and the keyword box is the single text field inside the rendered
-  `.bolt-filter-callout`. The callout renders async, so the script clicks the funnel
-  and polls a few frames for the input before focusing it.
-- Only active when the URL contains `/pullrequest/` **and** the funnel exists (i.e. the
-  Files tab); `f` passes through to ADO everywhere else. Beware: ADO's *global search*
-  box advertises "filter" in its aria-label — keyword-scoring heuristics grab it, which
-  is why the selectors are pinned instead.
+- Matching is case-insensitive on the **full path**, so typing a folder name shows
+  everything under it; multiple space-separated terms must all match. Paths are
+  reconstructed from the tree rows' `aria-level` hierarchy (same trick as
+  `ado-reviewed-checkbox`), since rows only render filenames.
+- Folders with no matching file underneath are hidden entirely.
+- Stacked diff cards (`.repos-summary-header` is the whole per-file card) are hidden
+  when their header path doesn't match; cards whose path can't be read stay visible
+  (wrongly showing beats silently hiding). Lazily rendered cards get the filter
+  applied on the observer tick after they materialize.
+- Only active when the URL contains `/pullrequest/`; `f` passes through to ADO
+  everywhere else. Beware: ADO's *global search* box advertises "filter" in its
+  aria-label — keyword-scoring heuristics grab it, which is why the box is our own and
+  the mount selectors are pinned (verified against the live DOM, 2026-06).
 
 ### `github-pr-file-tree.user.js`
 Brings two ADO-style affordances to the GitHub PR **Files changed** view: a viewed
@@ -119,7 +120,7 @@ and reload the PR page to get per-step log output in the DevTools console. Scrip
 prefixes:
 
 - `[ado-reviewed]` — path detection, tree-row matching, injection skips
-- `[ado-filter]` — scored input/toggle candidates, what got focused (or why nothing did)
+- `[ado-filter]` — box mount, each filter application with shown/total counts
 - `[ado-syntax]` — language detection per file, highlight errors
 - `[gh-pr-tree]` — tree-row scan, viewed-mirror injection, folder filter activations
 
