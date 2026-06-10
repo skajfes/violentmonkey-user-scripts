@@ -30,21 +30,22 @@ the native file-tree checkbox and auto-collapsing the file when reviewed.
   does *not* touch reviewed state (deliberately).
 
 ### `ado-filter-shortcut.user.js`
-Press **`f`** (outside any text field) to focus the file-filter box that belongs to the
-file tree — works on the PR Files tab and the repo Files hub.
+On a PR's **Files** tab, press **`f`** (outside any text field) to open the toolbar
+"Filter results" dropdown with the keyword box focused. Type a name, press **Enter** —
+the file tree filters to matching files. **Esc** closes the dropdown (native bolt
+behavior).
 
-- Anchored to the tree, not the page: finds the visible `[role="tree"]` / `.bolt-tree`,
-  then walks **up** its ancestors looking for the nearest control whose
-  placeholder/aria-label/title says "filter". Nearest ancestor wins, so it can't grab
-  global search or filter boxes elsewhere on the page. No pinned class names, so it
-  survives ADO's habit of renaming classes between deployments.
-- On pages with a file tree, `f` is swallowed before ADO's own handler sees it (capture +
-  `stopImmediatePropagation`), so it never falls through to global search. Pages without
-  a tree leave `f` alone.
-- If the filter is hidden behind the funnel toggle, clicks the toggle and polls a few
-  frames for the input to materialize before focusing it.
-- **Esc** blurs the input again (after ADO's own Esc-to-clear runs) so the page gets
-  keyboard scrolling back.
+- ADO has no inline tree-filter input on PR pages; the **Keyword** filter inside the
+  toolbar funnel dropdown is the native way to narrow the tree. The script just turns
+  the click-funnel-click-box dance into one keystroke.
+- Selectors verified against the live DOM: the funnel is `.repos-compare-filter button`,
+  and the keyword box is the single text field inside the rendered
+  `.bolt-filter-callout`. The callout renders async, so the script clicks the funnel
+  and polls a few frames for the input before focusing it.
+- Only active when the URL contains `/pullrequest/` **and** the funnel exists (i.e. the
+  Files tab); `f` passes through to ADO everywhere else. Beware: ADO's *global search*
+  box advertises "filter" in its aria-label — keyword-scoring heuristics grab it, which
+  is why the selectors are pinned instead.
 
 ### `github-pr-file-tree.user.js`
 Brings two ADO-style affordances to the GitHub PR **Files changed** view: a viewed

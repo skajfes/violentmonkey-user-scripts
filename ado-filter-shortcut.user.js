@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Azure DevOps: "f" focuses the file-tree filter
+// @name         Azure DevOps PR: "f" opens the file-tree keyword filter
 // @namespace    personal.ado.tweaks
-// @version      1.1.0
-// @description  Press "f" (outside any text field) to focus the file filter box that belongs to the file tree — PR Files tab or the repo Files hub. The filter is located by walking up from the tree element itself, so it can't grab global search or other filter boxes; ADO's own "f" handler is suppressed on tree pages. If the filter hides behind the funnel toggle, the toggle is clicked first and the input focused once it appears. Esc blurs the input again so the page gets keyboard scrolling back.
+// @version      1.2.0
+// @description  On a PR's Files tab, press "f" (outside any text field) to open the toolbar "Filter results" dropdown and focus its keyword box — type a name and press Enter to filter the file tree. ADO has no inline tree-filter input; the keyword filter inside that dropdown is the native way to narrow the tree, this just makes it one keystroke. Esc closes the dropdown (native bolt behavior).
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
 // @run-at       document-idle
@@ -17,94 +17,68 @@
   const DEBUG = false;
   const log = (...a) => { if (DEBUG) console.log('[ado-filter]', ...a); };
 
+  // Verified against the live DOM (PR Files tab, 2026-06):
+  // - The toolbar funnel is a bolt expandable button inside `.repos-compare-filter`.
+  // - Clicking it renders a `.bolt-filter-callout` dropdown ("Filter results") whose
+  //   header holds ONE text field — the keyword box. Typing + Enter commits the
+  //   keyword and filters the file tree (the other rows: Reviewed, Comments, … are
+  //   sub-menus, not text fields).
+  // - Esc inside the callout closes it natively; no custom handling needed.
+  const TOGGLE_SEL = '.repos-compare-filter button';
+  const INPUT_SEL  = '.bolt-filter-callout input[type="text"], .bolt-filter-callout input:not([type])';
+
   const isEditable = (el) =>
     !!el && (
       el.tagName === 'INPUT' ||
       el.tagName === 'TEXTAREA' ||
       el.tagName === 'SELECT' ||
       el.isContentEditable ||
-      // Monaco diff editors swallow typing via a hidden textarea, but guard the
+      // Monaco diff editors take typing via a hidden textarea, but guard the
       // container too in case focus sits on the editor shell.
       !!el.closest?.('.monaco-editor')
     );
 
   const isVisible = (el) => !!el && el.getClientRects().length > 0;
 
-  const hintOf = (el) =>
-    `${el.placeholder || ''} ${el.getAttribute('aria-label') || ''} ${el.title || ''}`.toLowerCase();
-
-  // The file tree itself is the anchor: ADO renders it as a bolt tree
-  // ([role="tree"] / .bolt-tree) on the PR Files tab and the repo Files hub.
-  const findTree = () =>
-    [...document.querySelectorAll('[role="tree"], .bolt-tree')].find(isVisible) || null;
-
-  // Walk UP from the tree, scanning each ancestor pane for a "filter"-flavored
-  // control. Nearest ancestor wins, so this can only ever find the filter that
-  // belongs to the tree — never global search (its hint says "search", not
-  // "filter") or filter boxes in other parts of the page (farther ancestors).
-  const findNearTree = (tree, selector) => {
-    for (let node = tree.parentElement; node && node !== document.body; node = node.parentElement) {
-      const hit = [...node.querySelectorAll(selector)]
-        .find((el) => isVisible(el) && /filter/.test(hintOf(el)));
-      if (hit) return hit;
-    }
-    return null;
-  };
-
-  const findFilterInput = (tree) =>
-    findNearTree(tree, 'input[type="text"], input[type="search"], input:not([type])');
-
-  // The funnel button that reveals the hidden filter bar.
-  const findFilterToggle = (tree) => findNearTree(tree, 'button, [role="button"]');
-
-  let lastFocused = null;
+  const findKeywordInput = () =>
+    [...document.querySelectorAll(INPUT_SEL)].find(isVisible) || null;
 
   const focusInput = (input) => {
     input.focus();
     input.select?.();
-    lastFocused = input;
     log('focused', input);
   };
 
-  const activateFilter = (tree) => {
-    const input = findFilterInput(tree);
-    if (input) { focusInput(input); return; }
+  const activateFilter = () => {
+    // Callout already open — just put the caret in the keyword box.
+    const open = findKeywordInput();
+    if (open) { focusInput(open); return; }
 
-    const toggle = findFilterToggle(tree);
-    if (!toggle) { log('no filter input or toggle found near tree'); return; }
-    log('clicking toggle', toggle);
+    const toggle = document.querySelector(TOGGLE_SEL);
+    if (!toggle) { log('no .repos-compare-filter toggle found'); return; }
     toggle.click();
 
-    // The filter bar renders async after the toggle — poll briefly for the input.
+    // The callout renders async after the click — poll briefly for its input.
+    // (Bolt usually focuses it on open by itself; this makes it deterministic.)
     let tries = 0;
     const poll = () => {
-      const late = findFilterInput(tree);
-      if (late) { focusInput(late); return; }
-      if (++tries < 20) requestAnimationFrame(poll);
-      else log('toggle clicked but no input appeared');
+      const input = findKeywordInput();
+      if (input) { focusInput(input); return; }
+      if (++tries < 30) requestAnimationFrame(poll);
+      else log('toggle clicked but callout input never appeared');
     };
     requestAnimationFrame(poll);
   };
 
   document.addEventListener('keydown', (e) => {
-    // Esc inside the input we focused: blur so the page gets key events back.
-    // ADO's own Esc handling (clearing the text) runs first via bubbling.
-    if (e.key === 'Escape' && lastFocused && e.target === lastFocused) {
-      lastFocused.blur();
-      lastFocused = null;
-      return;
-    }
-
     if (e.key !== KEY || e.ctrlKey || e.metaKey || e.altKey) return;
     if (isEditable(e.target)) return;
+    if (!/\/pullrequest\//i.test(location.pathname)) return;
+    if (!document.querySelector(TOGGLE_SEL)) return; // PR page, but not the Files tab
 
-    const tree = findTree();
-    if (!tree) return; // no file tree on this page — leave "f" to ADO
-
-    // Swallow the key unconditionally on tree pages so ADO's own "f" handler
-    // (global search) never fires, even while the funnel-toggle poll is pending.
+    // Swallow the key so nothing else on the page reacts to a bare "f".
     e.preventDefault();
     e.stopImmediatePropagation();
-    activateFilter(tree);
-  }, true); // capture, so ADO's global key handlers don't race us
+    activateFilter();
+  }, true); // capture, so ADO's own key handlers don't race us
 })();
