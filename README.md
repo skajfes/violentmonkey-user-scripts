@@ -30,12 +30,17 @@ the native file-tree checkbox and auto-collapsing the file when reviewed.
   does *not* touch reviewed state (deliberately).
 
 ### `ado-filter-shortcut.user.js`
-Press **`f`** (outside any text field) to focus ADO's native file-filter box above the
+Press **`f`** (outside any text field) to focus the file-filter box that belongs to the
 file tree — works on the PR Files tab and the repo Files hub.
 
-- Doesn't pin a selector: scores every visible text input by placeholder/aria-label
-  keywords (`filter`, `file`, `tree`, …) and tree/explorer-pane ancestry, then focuses
-  the best match. Survives ADO's habit of renaming classes between deployments.
+- Anchored to the tree, not the page: finds the visible `[role="tree"]` / `.bolt-tree`,
+  then walks **up** its ancestors looking for the nearest control whose
+  placeholder/aria-label/title says "filter". Nearest ancestor wins, so it can't grab
+  global search or filter boxes elsewhere on the page. No pinned class names, so it
+  survives ADO's habit of renaming classes between deployments.
+- On pages with a file tree, `f` is swallowed before ADO's own handler sees it (capture +
+  `stopImmediatePropagation`), so it never falls through to global search. Pages without
+  a tree leave `f` alone.
 - If the filter is hidden behind the funnel toggle, clicks the toggle and polls a few
   frames for the input to materialize before focusing it.
 - **Esc** blurs the input again (after ADO's own Esc-to-clear runs) so the page gets

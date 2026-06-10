@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Reviewed checkbox on stacked diff headers
 // @namespace    personal.ado.tweaks
-// @version      1.0.6
+// @version      1.0.7
 // @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -144,9 +144,22 @@
     // Strip them so reconstructed paths match the clean header path.
     const cleanName = (raw) => (raw || '').trim().replace(/\s*[+\-*]+\s*$/, '').trim();
 
+    // Prefer text outside badge-ish elements (comment-count pills etc.) so
+    // the name comes out clean at the source; fall back to the raw text if
+    // the heuristic eats everything.
+    const rowName = (row) => {
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+      let node, txt = '';
+      while ((node = walker.nextNode())) {
+        if (node.parentElement?.closest('[class*="pill"], [class*="badge"], [class*="comment"], [role="checkbox"]')) continue;
+        txt += node.nodeValue;
+      }
+      return cleanName(txt) || cleanName(row.textContent);
+    };
+
     for (const row of rows) {
       const level = parseInt(row.getAttribute('aria-level') || '0', 10);
-      const name = cleanName(row.textContent);
+      const name = rowName(row);
       if (!name || level < 1) continue;
       stack.length = level - 1;
       stack[level - 1] = name;
@@ -159,19 +172,25 @@
     return { byPath, byName };
   };
 
-  // Rows for files (and possibly folders) with comment threads get the
-  // comment-count badge appended to their textContent (e.g. "UpdateOffer.cs2"),
-  // so exact comparisons fail for exactly the commented files. A tree name
-  // matches the wanted name when any leftover after it is just badge text
-  // (digits, "+", whitespace) — never part of a real extension's start (".").
+  // Rows for files with comment threads get the comment-count badge appended
+  // to their textContent — plain counts ("UpdateOffer.cs2") or resolved
+  // fractions ("UpdateOffer.cs0/2") — so exact comparisons fail for exactly
+  // the commented files. A tree name matches the wanted name when any
+  // leftover after it is just badge text (digits, "+", "/", whitespace) —
+  // never part of a real extension's start (".").
+  const BADGE_JUNK = /^[\s\d+/]*$/;
   const badgeMatch = (treeText, wanted) =>
     treeText === wanted ||
-    (treeText.startsWith(wanted) && /^[\s\d+]*$/.test(treeText.slice(wanted.length)));
+    (treeText.startsWith(wanted) && BADGE_JUNK.test(treeText.slice(wanted.length)));
 
   const pathsMatch = (treePath, headerPath) => {
     const a = treePath.split('/');
     const b = headerPath.split('/');
-    return a.length === b.length && a.every((seg, i) => badgeMatch(seg, b[i]));
+    // A "/" inside the badge ("0/2") spills extra segments into the tree
+    // path; they're fine as long as they're all pure badge junk.
+    if (a.length < b.length) return false;
+    return b.every((seg, i) => badgeMatch(a[i], seg)) &&
+           a.slice(b.length).every((seg) => BADGE_JUNK.test(seg));
   };
 
   const findTreeRow = (headerPath, map) => {
