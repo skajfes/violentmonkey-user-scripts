@@ -29,6 +29,18 @@ the native file-tree checkbox and auto-collapsing the file when reviewed.
   `.bolt-card-expand-button` to collapse/expand. Clicking the native chevron manually
   does *not* touch reviewed state (deliberately).
 
+### `ado-filter-shortcut.user.js`
+Press **`f`** (outside any text field) to focus ADO's native file-filter box above the
+file tree — works on the PR Files tab and the repo Files hub.
+
+- Doesn't pin a selector: scores every visible text input by placeholder/aria-label
+  keywords (`filter`, `file`, `tree`, …) and tree/explorer-pane ancestry, then focuses
+  the best match. Survives ADO's habit of renaming classes between deployments.
+- If the filter is hidden behind the funnel toggle, clicks the toggle and polls a few
+  frames for the input to materialize before focusing it.
+- **Esc** blurs the input again (after ADO's own Esc-to-clear runs) so the page gets
+  keyboard scrolling back.
+
 ### `github-pr-file-tree.user.js`
 Brings two ADO-style affordances to the GitHub PR **Files changed** view: a viewed
 checkbox on every file row in the tree, and folder-as-filter on the tree's folder rows.
@@ -101,6 +113,7 @@ and reload the PR page to get per-step log output in the DevTools console. Scrip
 prefixes:
 
 - `[ado-reviewed]` — path detection, tree-row matching, injection skips
+- `[ado-filter]` — scored input/toggle candidates, what got focused (or why nothing did)
 - `[ado-syntax]` — language detection per file, highlight errors
 - `[gh-pr-tree]` — tree-row scan, viewed-mirror injection, folder filter activations
 
