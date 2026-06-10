@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Reviewed checkbox on stacked diff headers
 // @namespace    personal.ado.tweaks
-// @version      1.0.5
+// @version      1.0.6
 // @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -159,13 +159,33 @@
     return { byPath, byName };
   };
 
+  // Rows for files (and possibly folders) with comment threads get the
+  // comment-count badge appended to their textContent (e.g. "UpdateOffer.cs2"),
+  // so exact comparisons fail for exactly the commented files. A tree name
+  // matches the wanted name when any leftover after it is just badge text
+  // (digits, "+", whitespace) — never part of a real extension's start (".").
+  const badgeMatch = (treeText, wanted) =>
+    treeText === wanted ||
+    (treeText.startsWith(wanted) && /^[\s\d+]*$/.test(treeText.slice(wanted.length)));
+
+  const pathsMatch = (treePath, headerPath) => {
+    const a = treePath.split('/');
+    const b = headerPath.split('/');
+    return a.length === b.length && a.every((seg, i) => badgeMatch(seg, b[i]));
+  };
+
   const findTreeRow = (headerPath, map) => {
     if (map.byPath.has(headerPath)) return map.byPath.get(headerPath);
     for (const [p, row] of map.byPath) {
-      if (headerPath === p || headerPath.endsWith(p) || p.endsWith(headerPath)) return row;
+      if (pathsMatch(p, headerPath) || headerPath.endsWith(p) || p.endsWith(headerPath)) return row;
     }
     const filename = headerPath.split('/').pop();
-    const cands = map.byName.get(filename) || [];
+    let cands = map.byName.get(filename) || [];
+    if (!cands.length) {
+      for (const [name, rows] of map.byName) {
+        if (badgeMatch(name, filename)) { cands = rows; break; }
+      }
+    }
     if (cands.length === 1) return cands[0];
     if (cands.length > 1) {
       let best = cands[0], bestScore = -1;
