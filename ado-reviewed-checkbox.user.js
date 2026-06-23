@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Reviewed checkbox on stacked diff headers
 // @namespace    personal.ado.tweaks
-// @version      1.0.9
+// @version      1.0.11
 // @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -120,18 +120,27 @@
 
   // ---- helpers -----------------------------------------------------------
   const getPath = (header) => {
+    // ADO renders the file's full path in a dedicated subtitle element. For a
+    // renamed file the old path sits in a separate container whose inner node
+    // lacks `secondary-text`, so this selector uniquely picks the new path.
+    // Targeting it avoids scraping the header text, which also contains the
+    // entire diff and (for renames) the old path.
+    for (const el of header.querySelectorAll('.secondary-text.text-ellipsis')) {
+      const t = el.textContent?.trim();
+      if (t && t.startsWith('/') && /\.[a-zA-Z0-9]+$/.test(t)) return t;
+    }
+    // Fallback: walk text nodes, stopping before the "Renamed from" old path.
     const walker = document.createTreeWalker(header, NodeFilter.SHOW_TEXT);
     let node, best = null;
     while ((node = walker.nextNode())) {
       const t = node.nodeValue?.trim();
       if (!t) continue;
+      if (/renamed from/i.test(t)) break;
       if (t.startsWith('/') && /\.[a-zA-Z0-9]+$/.test(t)) {
         if (!best || t.length > best.length) best = t;
       }
     }
-    if (best) return best;
-    const m = header.textContent?.match(/\/[\w\-./]+\.[a-zA-Z0-9]+/);
-    return m?.[0] || null;
+    return best;
   };
 
   const buildTreeMap = () => {
