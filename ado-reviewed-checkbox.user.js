@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Reviewed checkbox on stacked diff headers
 // @namespace    personal.ado.tweaks
-// @version      1.0.8
+// @version      1.0.9
 // @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -146,7 +146,11 @@
 
     for (const row of rows) {
       const level = parseInt(row.getAttribute('aria-level') || '0', 10);
-      const name = cleanName(row.textContent);
+      // The filename has its own span. Reading row.textContent instead would
+      // glue on sibling content like the change-type pill ("rename, edit"),
+      // producing "Groups.razorrename, edit" and breaking every path match.
+      const nameEl = row.querySelector('.bolt-tree-cell span.text-ellipsis');
+      const name = cleanName(nameEl ? nameEl.textContent : row.textContent);
       if (!name || level < 1) continue;
       stack.length = level - 1;
       stack[level - 1] = name;
