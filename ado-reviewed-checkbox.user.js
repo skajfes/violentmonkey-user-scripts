@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Reviewed checkbox on stacked diff headers
 // @namespace    personal.ado.tweaks
-// @version      1.1.4
+// @version      1.1.5
 // @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse. Also shows an "X / Y reviewed" count in the compare toolbar next to the changed-files count.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -326,7 +326,12 @@
       stack.length = level - 1;
       stack[level - 1] = name;
       const cb = r.querySelector(TREE_CHECK_SEL);
-      if (!cb) continue; // folders / comment rows carry no reviewed checkbox
+      if (!cb) continue; // comment-thread rows carry no reviewed checkbox
+      // Folders carry a reviewed checkbox too (a roll-up marker for everything
+      // under them) — exclude them; only files count. The folder icon carries a
+      // type-agnostic class that file rows (language/file icons) never have. The
+      // folder name is already on the stack above, so children still resolve.
+      if (r.querySelector('.repos-folder-icon')) continue;
       // An empty "//" segment means an ancestor row was scrolled out, so the path
       // is partial — skip it rather than cache an entry under a bogus key.
       const path = '/' + stack.slice(0, level).join('/');
