@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Reviewed checkbox on stacked diff headers
 // @namespace    personal.ado.tweaks
-// @version      1.1.6
+// @version      1.1.7
 // @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse. Also shows an "X / Y reviewed" count in the compare toolbar next to the changed-files count.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -267,9 +267,30 @@
   // path is kept only to decide scope membership (folder-scoped counts), updated
   // only when it resolves cleanly.
   const reviewedCache = new Map(); // row index -> { reviewed: bool, path: string }
-  let cachePrKey = '';
+  let cacheViewKey = '';
   const prKey = () =>
     (location.pathname.match(/\/pullrequest\/(\d+)/i) || [])[1] || location.pathname;
+
+  // Row indices are only stable within a single view: switching the compared
+  // commit/iteration or applying a filter renumbers the list, so cached entries
+  // from the previous file set must be dropped. Folder scoping is NOT a view
+  // change — the tree is unchanged, only the count is narrowed — so it's excluded
+  // (it lives in the `path` query param, which we strip). The key combines the
+  // rest of the URL state with the comparison dropdown label and the filter
+  // control's state, so a reset fires on commit/iteration/filter changes.
+  const viewKey = () => {
+    const p = new URLSearchParams(location.search);
+    p.delete('path'); // folder scope — handled by filtering, not a reset
+    const qs = [...p.entries()].sort().map(([k, v]) => `${k}=${v}`).join('&');
+    const cmp = document.querySelector(
+      '.bolt-dropdown-expandable:not(.repos-compare-filter) .bolt-dropdown-expandable-button-label');
+    const filter = document.querySelector('.repos-compare-filter');
+    return [
+      prKey(), qs,
+      cmp ? cmp.textContent.trim() : '',
+      filter ? filter.textContent.trim() : '',
+    ].join('|');
+  };
   const findChangedFilesSpan = () => {
     for (const el of document.querySelectorAll('span.body-m.text-ellipsis')) {
       if (/\d+\s+changed files?/i.test(el.textContent || '')) return el;
@@ -306,8 +327,8 @@
     const scope = getScopePath(cfSpan);
     const inScope = (p) => !scope || p === scope || p.startsWith(scope + '/');
 
-    const key = prKey();
-    if (key !== cachePrKey) { reviewedCache.clear(); cachePrKey = key; }
+    const key = viewKey();
+    if (key !== cacheViewKey) { reviewedCache.clear(); cacheViewKey = key; }
 
     // Refresh the cache from the rows rendered right now. Scope the query to the
     // tree root so .bolt-tree-row elements from other widgets can't leak in.
