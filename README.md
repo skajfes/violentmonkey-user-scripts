@@ -39,9 +39,11 @@ the native file-tree checkbox and auto-collapsing the file when reviewed. Also s
   the `repos-folder-icon` class) carry a roll-up reviewed checkbox but are excluded — only files
   count. The query is scoped to the tree root so stray `.bolt-tree-row`s can't inflate it.
 - The cache resets when the view changes — switching the compared commit/iteration or applying a
-  filter renumbers the row indices, so stale entries are dropped. Folder scoping does *not* reset
-  it (the tree is unchanged, only the count is narrowed). The reset key combines the URL state
-  (minus the `path` folder-scope param) with the comparison and filter controls.
+  filter renumbers the row indices, so stale entries are dropped (otherwise you'd see nonsense like
+  `24 / 3 reviewed`). This is self-detected: filters/commits don't change the URL or any button, but
+  they renumber `data-row-index`, so a rendered file's path no longer matches the path cached at its
+  index — that mismatch triggers the reset. Folder scoping does *not* renumber (the tree isn't
+  collapsed), so it narrows the count without resetting.
 - Reconstructs each file's full path from the tree's `aria-level` hierarchy
   (tree rows only render filenames, not paths; folders are skipped via `aria-expanded`).
 - Strips status glyphs (`+`/`-`/`*`) that ADO appends to new/changed/deleted filenames.

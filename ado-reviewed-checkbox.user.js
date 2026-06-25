@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Reviewed checkbox on stacked diff headers
 // @namespace    personal.ado.tweaks
-// @version      1.1.7
+// @version      1.1.8
 // @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse. Also shows an "X / Y reviewed" count in the compare toolbar next to the changed-files count.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -267,30 +267,20 @@
   // path is kept only to decide scope membership (folder-scoped counts), updated
   // only when it resolves cleanly.
   const reviewedCache = new Map(); // row index -> { reviewed: bool, path: string }
-  let cacheViewKey = '';
+  let cachePrKey = '';
   const prKey = () =>
     (location.pathname.match(/\/pullrequest\/(\d+)/i) || [])[1] || location.pathname;
 
-  // Row indices are only stable within a single view: switching the compared
-  // commit/iteration or applying a filter renumbers the list, so cached entries
-  // from the previous file set must be dropped. Folder scoping is NOT a view
-  // change — the tree is unchanged, only the count is narrowed — so it's excluded
-  // (it lives in the `path` query param, which we strip). The key combines the
-  // rest of the URL state with the comparison dropdown label and the filter
-  // control's state, so a reset fires on commit/iteration/filter changes.
-  const viewKey = () => {
-    const p = new URLSearchParams(location.search);
-    p.delete('path'); // folder scope — handled by filtering, not a reset
-    const qs = [...p.entries()].sort().map(([k, v]) => `${k}=${v}`).join('&');
-    const cmp = document.querySelector(
-      '.bolt-dropdown-expandable:not(.repos-compare-filter) .bolt-dropdown-expandable-button-label');
-    const filter = document.querySelector('.repos-compare-filter');
-    return [
-      prKey(), qs,
-      cmp ? cmp.textContent.trim() : '',
-      filter ? filter.textContent.trim() : '',
-    ].join('|');
-  };
+  // A view change (switching the compared commit/iteration, or applying a filter)
+  // must drop the cache, else stale entries from the previous file set leak in
+  // (e.g. counting "24 / 3 reviewed" after filtering 24 files down to 3). None of
+  // those changes touch the URL, the dropdown buttons, or anything continuously
+  // observable — BUT data-row-index is the row's position in the currently-bound
+  // list, so a filter/commit renumbers it: a given index then points at a
+  // different file. Folder scoping does NOT renumber (the tree isn't collapsed).
+  // So updateCount self-detects a view change by comparing each rendered file's
+  // freshly-reconstructed path against the path cached at its index — any
+  // mismatch means the list was renumbered, and the whole cache is dropped.
   const findChangedFilesSpan = () => {
     for (const el of document.querySelectorAll('span.body-m.text-ellipsis')) {
       if (/\d+\s+changed files?/i.test(el.textContent || '')) return el;
@@ -327,41 +317,53 @@
     const scope = getScopePath(cfSpan);
     const inScope = (p) => !scope || p === scope || p.startsWith(scope + '/');
 
-    const key = viewKey();
-    if (key !== cacheViewKey) { reviewedCache.clear(); cacheViewKey = key; }
+    const pr = prKey();
+    if (pr !== cachePrKey) { reviewedCache.clear(); cachePrKey = pr; }
 
     // Refresh the cache from the rows rendered right now. Scope the query to the
     // tree root so .bolt-tree-row elements from other widgets can't leak in.
+    // Returns false the moment it spots a renumber (a rendered file's path no
+    // longer matches the path cached at its index) — the view changed, so the
+    // caller drops the cache and walks again from a clean slate.
     const treeRoot = document.querySelector(TREE_ROOT_SEL);
     const rows = (treeRoot || document).querySelectorAll(TREE_ROW_SEL);
-    const stack = [];
     const cleanName = (raw) => (raw || '').trim().replace(/\s*[+\-*]+\s*$/, '').trim();
-    for (const r of rows) {
-      const level = parseInt(r.getAttribute('aria-level') || '0', 10);
-      if (level < 1) continue;
-      const nameEl = r.querySelector('.bolt-tree-cell span.text-ellipsis');
-      const name = cleanName(nameEl ? nameEl.textContent : r.textContent);
-      if (!name) continue;
-      stack.length = level - 1;
-      stack[level - 1] = name;
-      const cb = r.querySelector(TREE_CHECK_SEL);
-      if (!cb) continue; // comment-thread rows carry no reviewed checkbox
-      // Folders carry a reviewed checkbox too (a roll-up marker for everything
-      // under them) — exclude them; only files count. The folder icon carries a
-      // type-agnostic class that file rows (language/file icons) never have. The
-      // folder name is already on the stack above, so children still resolve.
-      if (r.querySelector('.repos-folder-icon')) continue;
-      const idx = r.getAttribute('data-row-index') ?? r.getAttribute('aria-rowindex');
-      if (idx == null) continue;
-      const entry = reviewedCache.get(idx) || { reviewed: false, path: '' };
-      entry.reviewed = cb.getAttribute('aria-checked') === 'true';
-      // Keep the path only when it resolves cleanly; an empty "//" segment means
-      // an ancestor was scrolled out. The reviewed flag is still cached by index,
-      // so the file counts regardless — the path just gates scope membership.
-      const path = '/' + stack.slice(0, level).join('/');
-      if (!path.includes('//')) entry.path = path;
-      reviewedCache.set(idx, entry);
-    }
+    const walk = () => {
+      const stack = [];
+      for (const r of rows) {
+        const level = parseInt(r.getAttribute('aria-level') || '0', 10);
+        if (level < 1) continue;
+        const nameEl = r.querySelector('.bolt-tree-cell span.text-ellipsis');
+        const name = cleanName(nameEl ? nameEl.textContent : r.textContent);
+        if (!name) continue;
+        stack.length = level - 1;
+        stack[level - 1] = name;
+        const cb = r.querySelector(TREE_CHECK_SEL);
+        if (!cb) continue; // comment-thread rows carry no reviewed checkbox
+        // Folders carry a reviewed checkbox too (a roll-up marker for everything
+        // under them) — exclude them; only files count. The folder icon carries a
+        // type-agnostic class that file rows (language/file icons) never have. The
+        // folder name is already on the stack above, so children still resolve.
+        if (r.querySelector('.repos-folder-icon')) continue;
+        const idx = r.getAttribute('data-row-index') ?? r.getAttribute('aria-rowindex');
+        if (idx == null) continue;
+        // A clean path ("//"-free) reconstructs fully; an empty segment means an
+        // ancestor was scrolled out. The reviewed flag is still cached by index,
+        // so the file counts regardless — the path just gates scope membership.
+        const path = '/' + stack.slice(0, level).join('/');
+        const cleanPath = path.includes('//') ? '' : path;
+        const existing = reviewedCache.get(idx);
+        if (existing && existing.path && cleanPath && existing.path !== cleanPath) {
+          return false; // index now points at a different file → view changed
+        }
+        const entry = existing || { reviewed: false, path: '' };
+        entry.reviewed = cb.getAttribute('aria-checked') === 'true';
+        if (cleanPath) entry.path = cleanPath;
+        reviewedCache.set(idx, entry);
+      }
+      return true;
+    };
+    if (!walk()) { reviewedCache.clear(); walk(); }
 
     let reviewed = 0, seen = 0;
     for (const entry of reviewedCache.values()) {
