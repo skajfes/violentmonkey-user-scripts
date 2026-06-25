@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Reviewed checkbox on stacked diff headers
 // @namespace    personal.ado.tweaks
-// @version      1.0.12
-// @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse.
+// @version      1.1.0
+// @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse. Also shows an "X / Y reviewed" count in the compare toolbar next to the changed-files count.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
 // @run-at       document-idle
@@ -18,6 +18,8 @@
   const TREE_ROW_SEL    = '.bolt-tree-row';
   const TREE_CHECK_SEL  = '[role="checkbox"][aria-label="Mark as reviewed"]';
   const MARK_ATTR       = 'data-ado-reviewed-mirror';
+  const COUNT_MARK      = 'data-ado-reviewed-count';
+  const TREE_ROOT_SEL   = '.repos-changes-explorer-tree';
   const DEBUG = false;
   const log = (...a) => { if (DEBUG) console.log('[ado-reviewed]', ...a); };
 
@@ -114,6 +116,19 @@
         --ado-rev-bd: rgba(63,185,80,0.5);
         --ado-rev-hover-bg: rgba(63,185,80,0.24);
       }
+    }
+
+    .ado-rev-count {
+      white-space: nowrap;
+      font-weight: 600;
+      opacity: 0.8;
+    }
+    .ado-rev-count.is-complete {
+      color: #107c10;
+      opacity: 1;
+    }
+    @media (prefers-color-scheme: dark) {
+      .ado-rev-count.is-complete { color: #3fb950; }
     }
   `;
   (document.head || document.documentElement).appendChild(style);
@@ -223,6 +238,91 @@
     requestAnimationFrame(check);
   };
 
+  // ---- reviewed count in the compare toolbar -----------------------------
+  // The toolbar shows "<n> changed files" in a span.body-m.text-ellipsis that
+  // sits inside a flex-row.rhythm-horizontal-8 (8px-gap row). We append a
+  // sibling span there reading "X / Y reviewed".
+  //
+  // Y is ADO's own count: scope-aware (folder-scoped views show only that
+  // folder's count) and immune to the tree's virtualization. The tree NEVER
+  // collapses to the scoped folder — it always lists every changed file — so to
+  // match Y we must count reviewed only among files under the scoped path. That
+  // path is the subtitle under the count line (and, when unscoped, the common
+  // root of all changed files — so the same prefix filter yields the full set
+  // either way). X is tallied from the tree checkboxes via buildTreeMap, which
+  // reconstructs each file's full path; the tree is virtualized, so rows
+  // scrolled out of the DOM aren't counted — the tally is live and settles as
+  // you scroll/toggle.
+  const findChangedFilesSpan = () => {
+    for (const el of document.querySelectorAll('span.body-m.text-ellipsis')) {
+      if (/\d+\s+changed files?/i.test(el.textContent || '')) return el;
+    }
+    return null;
+  };
+
+  const getScopePath = (countSpan) => {
+    const col = countSpan.closest('.flex-column');
+    const sub = col && col.querySelector('span.secondary-text.text-ellipsis');
+    const t = sub && sub.textContent ? sub.textContent.trim() : '';
+    return t.startsWith('/') ? t.replace(/\/+$/, '') : '';
+  };
+
+  let treeObserved = false;
+  const ensureTreeObserver = () => {
+    if (treeObserved) return;
+    const tree = document.querySelector(TREE_ROOT_SEL);
+    if (!tree) return;
+    // Toggling reviewed via the native tree checkbox flips aria-checked without
+    // necessarily mutating childList, so the body observer alone can miss it.
+    new MutationObserver(queueCount).observe(tree, {
+      attributes: true, attributeFilter: ['aria-checked'], subtree: true,
+    });
+    treeObserved = true;
+  };
+
+  const updateCount = () => {
+    const cfSpan = findChangedFilesSpan();
+    if (!cfSpan || !cfSpan.parentElement) return;
+    const row = cfSpan.parentElement;
+
+    const m = (cfSpan.textContent || '').match(/(\d+)\s+changed files?/i);
+    const scope = getScopePath(cfSpan);
+    const inScope = (p) => !scope || p === scope || p.startsWith(scope + '/');
+
+    const map = buildTreeMap();
+    let reviewed = 0, seen = 0;
+    for (const [path, r] of map.byPath) {
+      if (!inScope(path)) continue;
+      const cb = r.querySelector(TREE_CHECK_SEL);
+      if (!cb) continue;
+      seen++;
+      if (cb.getAttribute('aria-checked') === 'true') reviewed++;
+    }
+    let total = m ? parseInt(m[1], 10) : seen;
+    // Guard a transient frame where ADO's text and the tree haven't re-rendered
+    // in lockstep (e.g. mid scope-switch); with scoping correct, X > Y otherwise
+    // shouldn't happen.
+    if (reviewed > total) reviewed = total;
+
+    let el = row.querySelector(`[${COUNT_MARK}]`);
+    if (!el) {
+      el = document.createElement('span');
+      el.setAttribute(COUNT_MARK, '1');
+      el.className = 'body-m ado-rev-count';
+      row.appendChild(el);
+    }
+    el.textContent = `${reviewed} / ${total} reviewed`;
+    el.classList.toggle('is-complete', total > 0 && reviewed === total);
+    ensureTreeObserver();
+  };
+
+  let countQueued = false;
+  const queueCount = () => {
+    if (countQueued) return;
+    countQueued = true;
+    requestAnimationFrame(() => { countQueued = false; updateCount(); });
+  };
+
   // ---- mirror pill -------------------------------------------------------
   const createMirror = (treeCheckbox, card) => {
     const wrap = document.createElement('label');
@@ -305,6 +405,7 @@
   let scanQueued = false;
   const scan = () => {
     scanQueued = false;
+    updateCount();
     const headers = document.querySelectorAll(HEADER_SEL);
     if (!headers.length) return;
     const treeMap = buildTreeMap();

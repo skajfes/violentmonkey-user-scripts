@@ -19,8 +19,15 @@ and bumps the code font to JetBrains Mono Nerd Font at 14px/24px line height.
 
 ### `ado-reviewed-checkbox.user.js`
 Adds a **Reviewed** pill to each file's header in the stacked folder-diff view, mirroring
-the native file-tree checkbox and auto-collapsing the file when reviewed.
+the native file-tree checkbox and auto-collapsing the file when reviewed. Also shows an
+**`X / Y reviewed`** count in the compare toolbar next to the changed-files count
+(turns green when all are reviewed).
 
+- The count's total (`Y`) is read from ADO's own "`N` changed files" text, so it stays
+  scope-aware (folder-scoped views show only that folder) and immune to tree virtualization.
+  The tree itself never collapses to the scoped folder, so the reviewed tally (`X`) is
+  counted only among files under the scoped path (the subtitle under the count line) to
+  match `Y`; it's read from the tree checkboxes and settles as you scroll.
 - Reconstructs each file's full path from the tree's `aria-level` hierarchy
   (tree rows only render filenames, not paths; folders are skipped via `aria-expanded`).
 - Strips status glyphs (`+`/`-`/`*`) that ADO appends to new/changed/deleted filenames.
