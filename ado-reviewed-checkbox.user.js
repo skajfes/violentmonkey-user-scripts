@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Reviewed checkbox on stacked diff headers
 // @namespace    personal.ado.tweaks
-// @version      1.1.1
+// @version      1.1.3
 // @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse. Also shows an "X / Y reviewed" count in the compare toolbar next to the changed-files count.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -253,12 +253,18 @@
   //
   // X must survive virtualization. Counting the live DOM makes X bounce up and
   // down as reviewed rows mount/unmount while you scroll. Instead we cache each
-  // file's last-known reviewed state (keyed by full path), upsert it as rows
-  // mount, and never drop it when they unmount — so X only changes when a file's
-  // actual state changes, not when it scrolls. A file never yet scrolled into
-  // view is simply unknown, so X climbs monotonically until you've scrolled the
-  // tree once, rather than flickering. The cache is reset per pull request.
-  const reviewedCache = new Map(); // full path -> boolean (last-known reviewed)
+  // file's last-known reviewed state, upsert it as rows mount, and never drop it
+  // when they unmount — so X only changes when a file's actual state changes,
+  // not when it scrolls. A file never yet scrolled into view is simply unknown,
+  // so X climbs monotonically until you've scrolled the tree once, rather than
+  // flickering. The cache is reset per pull request.
+  //
+  // The cache is keyed by the row's absolute logical index (data-row-index /
+  // aria-rowindex), NOT the reconstructed path: the index is stable across
+  // virtualized scroll and unique per file, so a file can never be counted twice
+  // even when path reconstruction is ambiguous. The reconstructed path is kept
+  // only to decide scope membership (folder-scoped counts).
+  const reviewedCache = new Map(); // row index -> { reviewed: bool, path: string }
   let cachePrKey = '';
   const prKey = () =>
     (location.pathname.match(/\/pullrequest\/(\d+)/i) || [])[1] || location.pathname;
@@ -301,28 +307,42 @@
     const key = prKey();
     if (key !== cachePrKey) { reviewedCache.clear(); cachePrKey = key; }
 
-    // Refresh the cache from whatever rows are in the DOM right now. Skip paths
-    // with an empty segment ("//") — those come from an ancestor row scrolled
-    // out of the virtualized tree, so the reconstructed path is incomplete.
-    const map = buildTreeMap();
-    for (const [path, r] of map.byPath) {
-      if (path.includes('//')) continue;
+    // Refresh the cache from the rows rendered right now. Scope the query to the
+    // tree root so .bolt-tree-row elements from other widgets can't leak in.
+    const treeRoot = document.querySelector(TREE_ROOT_SEL);
+    const rows = (treeRoot || document).querySelectorAll(TREE_ROW_SEL);
+    const stack = [];
+    const cleanName = (raw) => (raw || '').trim().replace(/\s*[+\-*]+\s*$/, '').trim();
+    for (const r of rows) {
+      const level = parseInt(r.getAttribute('aria-level') || '0', 10);
+      if (level < 1) continue;
+      const nameEl = r.querySelector('.bolt-tree-cell span.text-ellipsis');
+      const name = cleanName(nameEl ? nameEl.textContent : r.textContent);
+      if (!name) continue;
+      stack.length = level - 1;
+      stack[level - 1] = name;
       const cb = r.querySelector(TREE_CHECK_SEL);
-      if (!cb) continue;
-      reviewedCache.set(path, cb.getAttribute('aria-checked') === 'true');
+      if (!cb) continue; // folders / comment rows carry no reviewed checkbox
+      const idx = r.getAttribute('data-row-index') ?? r.getAttribute('aria-rowindex');
+      if (idx == null) continue;
+      const entry = reviewedCache.get(idx) || { reviewed: false, path: '' };
+      entry.reviewed = cb.getAttribute('aria-checked') === 'true';
+      // Only overwrite the path with a clean reconstruction; an empty segment
+      // ("//") means an ancestor row was scrolled out, so the path is partial.
+      const path = '/' + stack.slice(0, level).join('/');
+      if (!path.includes('//')) entry.path = path;
+      reviewedCache.set(idx, entry);
     }
 
     let reviewed = 0, seen = 0;
-    for (const [path, isRev] of reviewedCache) {
-      if (!inScope(path)) continue;
+    for (const entry of reviewedCache.values()) {
+      // In a folder-scoped view, skip files outside the scope (and files whose
+      // path we never cleanly resolved). Unscoped, count every cached file.
+      if (scope && (!entry.path || !inScope(entry.path))) continue;
       seen++;
-      if (isRev) reviewed++;
+      if (entry.reviewed) reviewed++;
     }
-    let total = m ? parseInt(m[1], 10) : seen;
-    // Guard a transient frame where ADO's text and the tree haven't re-rendered
-    // in lockstep (e.g. mid scope-switch); with scoping correct, X > Y otherwise
-    // shouldn't happen.
-    if (reviewed > total) reviewed = total;
+    const total = m ? parseInt(m[1], 10) : seen;
 
     let el = row.querySelector(`[${COUNT_MARK}]`);
     if (!el) {

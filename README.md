@@ -32,6 +32,9 @@ the native file-tree checkbox and auto-collapsing the file when reviewed. Also s
   a per-PR cache of each file's last-known reviewed state — not the live DOM — so it doesn't
   bounce up and down while scrolling. A file never yet scrolled into view is unknown, so
   `X` climbs monotonically until you've scrolled the tree once, then settles.
+- The cache is keyed by each row's absolute logical index (`data-row-index` / `aria-rowindex`),
+  not the reconstructed path, so a file can't be counted twice if its path resolves ambiguously;
+  the query is scoped to the tree root so stray `.bolt-tree-row`s elsewhere can't inflate it.
 - Reconstructs each file's full path from the tree's `aria-level` hierarchy
   (tree rows only render filenames, not paths; folders are skipped via `aria-expanded`).
 - Strips status glyphs (`+`/`-`/`*`) that ADO appends to new/changed/deleted filenames.
