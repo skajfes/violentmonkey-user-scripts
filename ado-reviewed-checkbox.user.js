@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Reviewed checkbox on stacked diff headers
 // @namespace    personal.ado.tweaks
-// @version      1.1.3
+// @version      1.1.4
 // @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse. Also shows an "X / Y reviewed" count in the compare toolbar next to the changed-files count.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -259,12 +259,16 @@
   // so X climbs monotonically until you've scrolled the tree once, rather than
   // flickering. The cache is reset per pull request.
   //
-  // The cache is keyed by the row's absolute logical index (data-row-index /
-  // aria-rowindex), NOT the reconstructed path: the index is stable across
-  // virtualized scroll and unique per file, so a file can never be counted twice
-  // even when path reconstruction is ambiguous. The reconstructed path is kept
-  // only to decide scope membership (folder-scoped counts).
-  const reviewedCache = new Map(); // row index -> { reviewed: bool, path: string }
+  // The cache is keyed by the file's reconstructed full path. The tree renders a
+  // CONTIGUOUS slice of rows in document order, so reconstructing a path from the
+  // running ancestor stack yields either the correct path (all ancestors present,
+  // and in tree order they must be the right ones) or a path with an empty "//"
+  // segment (an ancestor scrolled out) — which we skip. A wrong-but-clean path is
+  // impossible, so the same file always maps to the same key and the Map dedups
+  // it. Row indices (data-row-index / aria-rowindex) are NOT usable here: they're
+  // reassigned per render, so the same file gets fresh keys as you scroll and the
+  // count runs away.
+  const reviewedCache = new Map(); // full path -> boolean (last-known reviewed)
   let cachePrKey = '';
   const prKey = () =>
     (location.pathname.match(/\/pullrequest\/(\d+)/i) || [])[1] || location.pathname;
@@ -323,24 +327,18 @@
       stack[level - 1] = name;
       const cb = r.querySelector(TREE_CHECK_SEL);
       if (!cb) continue; // folders / comment rows carry no reviewed checkbox
-      const idx = r.getAttribute('data-row-index') ?? r.getAttribute('aria-rowindex');
-      if (idx == null) continue;
-      const entry = reviewedCache.get(idx) || { reviewed: false, path: '' };
-      entry.reviewed = cb.getAttribute('aria-checked') === 'true';
-      // Only overwrite the path with a clean reconstruction; an empty segment
-      // ("//") means an ancestor row was scrolled out, so the path is partial.
+      // An empty "//" segment means an ancestor row was scrolled out, so the path
+      // is partial — skip it rather than cache an entry under a bogus key.
       const path = '/' + stack.slice(0, level).join('/');
-      if (!path.includes('//')) entry.path = path;
-      reviewedCache.set(idx, entry);
+      if (path.includes('//')) continue;
+      reviewedCache.set(path, cb.getAttribute('aria-checked') === 'true');
     }
 
     let reviewed = 0, seen = 0;
-    for (const entry of reviewedCache.values()) {
-      // In a folder-scoped view, skip files outside the scope (and files whose
-      // path we never cleanly resolved). Unscoped, count every cached file.
-      if (scope && (!entry.path || !inScope(entry.path))) continue;
+    for (const [path, isRev] of reviewedCache) {
+      if (!inScope(path)) continue; // folder-scoped views count only that folder
       seen++;
-      if (entry.reviewed) reviewed++;
+      if (isRev) reviewed++;
     }
     const total = m ? parseInt(m[1], 10) : seen;
 
