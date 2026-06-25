@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Reviewed checkbox on stacked diff headers
 // @namespace    personal.ado.tweaks
-// @version      1.1.0
+// @version      1.1.1
 // @description  Adds a "Reviewed" pill to each file header in the stacked folder-diff view. Mirrors the native file tree checkbox, and collapses/expands the file via ADO's built-in card collapse. Also shows an "X / Y reviewed" count in the compare toolbar next to the changed-files count.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -249,10 +249,19 @@
   // match Y we must count reviewed only among files under the scoped path. That
   // path is the subtitle under the count line (and, when unscoped, the common
   // root of all changed files — so the same prefix filter yields the full set
-  // either way). X is tallied from the tree checkboxes via buildTreeMap, which
-  // reconstructs each file's full path; the tree is virtualized, so rows
-  // scrolled out of the DOM aren't counted — the tally is live and settles as
-  // you scroll/toggle.
+  // either way).
+  //
+  // X must survive virtualization. Counting the live DOM makes X bounce up and
+  // down as reviewed rows mount/unmount while you scroll. Instead we cache each
+  // file's last-known reviewed state (keyed by full path), upsert it as rows
+  // mount, and never drop it when they unmount — so X only changes when a file's
+  // actual state changes, not when it scrolls. A file never yet scrolled into
+  // view is simply unknown, so X climbs monotonically until you've scrolled the
+  // tree once, rather than flickering. The cache is reset per pull request.
+  const reviewedCache = new Map(); // full path -> boolean (last-known reviewed)
+  let cachePrKey = '';
+  const prKey = () =>
+    (location.pathname.match(/\/pullrequest\/(\d+)/i) || [])[1] || location.pathname;
   const findChangedFilesSpan = () => {
     for (const el of document.querySelectorAll('span.body-m.text-ellipsis')) {
       if (/\d+\s+changed files?/i.test(el.textContent || '')) return el;
@@ -289,14 +298,25 @@
     const scope = getScopePath(cfSpan);
     const inScope = (p) => !scope || p === scope || p.startsWith(scope + '/');
 
+    const key = prKey();
+    if (key !== cachePrKey) { reviewedCache.clear(); cachePrKey = key; }
+
+    // Refresh the cache from whatever rows are in the DOM right now. Skip paths
+    // with an empty segment ("//") — those come from an ancestor row scrolled
+    // out of the virtualized tree, so the reconstructed path is incomplete.
     const map = buildTreeMap();
-    let reviewed = 0, seen = 0;
     for (const [path, r] of map.byPath) {
-      if (!inScope(path)) continue;
+      if (path.includes('//')) continue;
       const cb = r.querySelector(TREE_CHECK_SEL);
       if (!cb) continue;
+      reviewedCache.set(path, cb.getAttribute('aria-checked') === 'true');
+    }
+
+    let reviewed = 0, seen = 0;
+    for (const [path, isRev] of reviewedCache) {
+      if (!inScope(path)) continue;
       seen++;
-      if (cb.getAttribute('aria-checked') === 'true') reviewed++;
+      if (isRev) reviewed++;
     }
     let total = m ? parseInt(m[1], 10) : seen;
     // Guard a transient frame where ADO's text and the tree haven't re-rendered
