@@ -1,16 +1,19 @@
 // ==UserScript==
 // @name         GitHub PR: File-tree viewed checkboxes + folder filter
 // @namespace    personal.github.tweaks
-// @version      1.1.0
+// @version      1.2.0
 // @description  In the Files Changed / Changes view, mirrors each file's native "Viewed" toggle into the file tree as a checkbox (folders get one too — it checks/unchecks all files underneath and reflects all/some/none viewed), lets you click a folder OR file in the tree to filter the diff list to just that folder's files (or that single file), and adds a "Load all files" button that scrolls through to force every lazy-rendered diff to materialise. Click the same row (or the "Clear filter" pill) to unfilter.
-// @match        https://github.com/*/*/pull/*/files*
-// @match        https://github.com/*/*/pull/*/changes*
+// @match        https://github.com/*
 // @run-at       document-idle
 // @grant        none
 // @downloadURL  https://raw.githubusercontent.com/skajfes/violentmonkey-user-scripts/main/github-pr-file-tree.user.js
 // @updateURL    https://raw.githubusercontent.com/skajfes/violentmonkey-user-scripts/main/github-pr-file-tree.user.js
 // @homepageURL  https://github.com/skajfes/violentmonkey-user-scripts
 // ==/UserScript==
+
+// Match all of github.com: GitHub navigates client-side (Turbo / React router), so a
+// userscript matched only on /files would never be injected when you arrive via the
+// Conversation tab or the PR list. scan() gates itself on isChangesPage() instead.
 
 (() => {
   const DEBUG = false;
@@ -140,6 +143,9 @@
   (document.head || document.documentElement).appendChild(style);
 
   // ---- DOM helpers -------------------------------------------------------
+
+  const isChangesPage = () =>
+    /^\/[^/]+\/[^/]+\/pull\/\d+\/(files|changes)(\/|$)/.test(location.pathname);
 
   const isFolder = (item) => item.hasAttribute('aria-expanded');
 
@@ -537,6 +543,11 @@
   let scanQueued = false;
   const scan = () => {
     scanQueued = false;
+    if (!isChangesPage()) {
+      // Soft-navigated away from the diff view — drop any lingering filter state.
+      if (activeRow) clearFilter();
+      return;
+    }
     ensureLoadAllButton();
     const items = allTreeItems();
     if (!items.length) { warn('no treeitems found'); return; }
