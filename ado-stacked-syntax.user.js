@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Azure DevOps PR: Stacked diff syntax highlighting
 // @namespace    personal.ado.tweaks
-// @version      1.0.5
+// @version      1.0.6
 // @description  Adds client-side syntax highlighting (via highlight.js) to the stacked folder-diff view, which ADO renders as plain HTML without any tokenization.
 // @match        https://dev.azure.com/*
 // @match        https://*.visualstudio.com/*
@@ -60,10 +60,22 @@
     .repos-line-content.ado-hl-applied::after {
       color: #000;
     }
+    /* Selection paints the hidden original text in the selection color, which
+       shows through under the overlay as doubled, misaligned glyphs (upright vs
+       italic comments). Keep it transparent: the selection background still
+       shows, and the overlay (painted above it) supplies the visible text. */
+    .repos-line-content.ado-hl-applied::selection,
+    .repos-line-content.ado-hl-applied *::selection {
+      color: transparent !important;
+      text-shadow: none !important;
+    }
     .ado-hl-overlay {
       position: absolute;
       inset: 0;
       pointer-events: none;
+      /* Not selectable: otherwise copy yields each line twice, and the overlay's
+         own selection highlight lands on different columns than the original's. */
+      user-select: none;
       white-space: pre;
       font: inherit;
       color: #000;
